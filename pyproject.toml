@@ -1,0 +1,251 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+# ===========================================================================
+# Package metadata (PyPI)
+# ===========================================================================
+
+[project]
+name = "XCalib"
+dynamic = ["version"]
+description = "Camera-LiDAR cross-modal matching for edge devices: pretrained matchers, targetless calibration, ONNX/TensorRT export, training, and one-shot adaptation."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+# No upper cap: the wheel is pure Python and every binary dep (torch >= 2.9,
+# numpy 2.x, h5py, onnxruntime, abi3 opencv) ships 3.13/3.14 wheels — pip
+# resolves the right build per interpreter. CI tests 3.10 through 3.14.
+requires-python = ">=3.10"
+authors = [{ name = "Lihao Guo", email = "leolihao@arizona.edu" }]
+keywords = [
+    "camera-lidar",
+    "cross-modal matching",
+    "extrinsic calibration",
+    "jetson",
+    "tensorrt",
+    "onnx",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Operating System :: OS Independent",
+]
+# torch is intentionally declared without an index pin: on Jetson AGX Thor the
+# default PyPI wheel (>=2.12, manylinux_2_28 aarch64 + bundled CUDA 13) works
+# out of the box; on x86 workstations install the CUDA build you need first
+# (see README section 2) and pip will leave it alone.
+dependencies = [
+    "numpy>=2.0,<3",
+    "pyyaml>=6.0,<7",
+    "loguru>=0.7,<0.8",
+    "tqdm>=4.67,<5",
+    "opencv-python>=4.10,<5",
+    "torch>=2.2",
+    "huggingface_hub>=0.30",
+]
+
+[project.optional-dependencies]
+# ONNX export + onnxruntime parity checks (matcher.build("onnx")).
+onnx = ["onnx>=1.16,<2", "onnxruntime>=1.18,<2"]
+# HDF5-cache training / validation (xcalib.train, scripts/paper/train_hdf5.py).
+train = ["h5py>=3.11,<4"]
+dev = [
+    "onnx>=1.16,<2",
+    "onnxruntime>=1.18,<2",
+    "h5py>=3.11,<4",
+    "pytest>=8,<9",
+    "ruff>=0.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.26",
+]
+
+[project.scripts]
+xcalib = "xcalib.cli:main"
+
+[project.urls]
+Repository = "https://github.com/radar-lab/XCalib"
+Documentation = "https://radar-lab.github.io/XCalib/"
+
+[tool.hatch.version]
+path = "src/xcalib/__init__.py"
+
+# Configs ship as package data (src/xcalib/cfg/*.yaml), so the wheel needs no
+# force-include. Checkpoints are NOT bundled -- they come from the HuggingFace
+# Hub (see xcalib/hub/) or a local checkpoint directory.
+[tool.hatch.build.targets.wheel]
+packages = ["src/xcalib"]
+exclude = ["**/__pycache__", "**/*.pyc"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/xcalib",
+    "scripts",
+    "docs",
+    "tests",
+    "README.md",
+    "requirements.txt",
+]
+exclude = ["**/__pycache__", "**/*.pyc", "demo"]
+
+# ===========================================================================
+# Lint
+# ===========================================================================
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+# Default pycodestyle/pyflakes set; style-only rules stay off so lab scripts
+# don't fight the linter.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# ensure_torch() must run before the engine imports pull torch in.
+"src/xcalib/__init__.py" = ["E402"]
+
+[tool.pytest.ini_options]
+markers = [
+  "smoke: fast import, architecture, and optional checkpoint smoke tests",
+  "integration: multi-component checks such as ONNX export, training, and oneshot flows",
+  "requires_checkpoint: tests that need local checkpoints/*.pth files and skip in public CI",
+]
+
+# ===========================================================================
+# Pixi dev environment (was pixi.toml; `pixi install` reads this file)
+# ===========================================================================
+
+[tool.pixi.workspace]
+authors = ["Lihao Guo <leolihao@arizona.edu>"]
+channels = ["conda-forge"]
+platforms = ["linux-aarch64", "linux-64", "win-64", "osx-arm64"]
+
+[tool.pixi.tasks]
+# ---- Paper validation (PyTorch, dev box; uses CUDA when available) -------
+validate-utc4 = { cmd = "python scripts/paper/validate_paper.py --site utc4", description = "Verify UTC4 Table I reference numbers (requires local institutional HDF5/weights)" }
+validate-utc3 = { cmd = "python scripts/paper/validate_paper.py --site utc3", description = "Verify UTC3 Table I reference numbers (requires local institutional HDF5/weights)" }
+validate-a9 = { cmd = "python scripts/paper/validate_paper.py --site a9_dataset_r02_s01", description = "Reproduce the public A9 r02_s01 Table I column (reads repo-local or Hub cache)" }
+
+# ---- ONNX validation (ORT, runs anywhere; FP32) --------------------------
+validate-onnx-utc4 = { cmd = "python scripts/paper/validate_onnx.py --site utc4 --output docs/evidence/standalone_onnx_validation_utc4.json", description = "Verify UTC4 ONNX reference metrics (requires local institutional HDF5)" }
+validate-onnx-utc3 = { cmd = "python scripts/paper/validate_onnx.py --site utc3 --output docs/evidence/standalone_onnx_validation_utc3.json", description = "Verify UTC3 ONNX reference metrics (requires local institutional HDF5)" }
+
+# ---- ONNX export (per-site; UTC4 is the historical default) --------------
+# Each call writes onnx/<model>_<site>/ so UTC3 and UTC4 weights cannot
+# overwrite each other.
+export-onnx = { cmd = "python scripts/paper/export_onnx.py --model crlite --site utc4", description = "Export crlite/utc4 to ONNX (append -- --model/--site for others)" }
+export-onnx-utc4-all = { cmd = "python scripts/paper/export_onnx.py --model crlite --site utc4 && python scripts/paper/export_onnx.py --model crlite_2dpe --site utc4 && python scripts/paper/export_onnx.py --model crlite_vit_exp1 --site utc4 && python scripts/paper/export_onnx.py --model crlite_vit_exp3 --site utc4 && python scripts/paper/export_onnx.py --model calibrefine --site utc4", description = "Export all five models with UTC4 weights to onnx/<model>_utc4/" }
+export-onnx-utc3-all = { cmd = "python scripts/paper/export_onnx.py --model crlite --site utc3 && python scripts/paper/export_onnx.py --model crlite_2dpe --site utc3 && python scripts/paper/export_onnx.py --model crlite_vit_exp1 --site utc3 && python scripts/paper/export_onnx.py --model crlite_vit_exp3 --site utc3 && python scripts/paper/export_onnx.py --model calibrefine --site utc3", description = "Export all five models with UTC3 weights to onnx/<model>_utc3/" }
+export-onnx-all = { depends-on = ["export-onnx-utc4-all", "export-onnx-utc3-all"], description = "Export every model for both UTC sites" }
+
+# ---- TensorRT engines (per-site; reads onnx/<model>_<site>/) -------------
+build-trt = { cmd = "python scripts/paper/build_trt.py --site utc4", description = "Build TensorRT engine(s) from UTC4 ONNX exports (Jetson; needs trtexec)" }
+build-trt-utc4-all = { cmd = "python scripts/paper/build_trt.py --all --site utc4 --log-dir reports/trt_logs", description = "Build TensorRT engines for all UTC4 models, logs to reports/trt_logs" }
+build-trt-utc3-all = { cmd = "python scripts/paper/build_trt.py --all --site utc3 --log-dir reports/trt_logs", description = "Build TensorRT engines for all UTC3 models, logs to reports/trt_logs" }
+build-trt-all = { depends-on = ["build-trt-utc4-all", "build-trt-utc3-all"], description = "Build TensorRT engines for both UTC sites" }
+
+# ---- TensorRT benchmark (per-site; reads engines/<model>_<site>/) --------
+bench-trt = { cmd = "python scripts/paper/bench_trt.py --site utc4", description = "Benchmark UTC4 TensorRT engines (alias of bench-trt-utc4)" }
+bench-trt-utc4 = { cmd = "python scripts/paper/bench_trt.py --site utc4", description = "Benchmark UTC4 TensorRT engines (latency per model)" }
+bench-trt-utc3 = { cmd = "python scripts/paper/bench_trt.py --site utc3", description = "Benchmark UTC3 TensorRT engines (latency per model)" }
+
+# ---- Training (HDF5 caches only) -----------------------------------------
+# Fine-tune example (packaged config is picked from --model + --site):
+#   pixi run train-hdf5 -- --model crlite --site utc4 \
+#     --train-hdf5 /path/to/utc_train.h5 --val-hdf5 /path/to/utc_val.h5 \
+#     --weights checkpoints/crlite_utc4_best.pth --output-dir runs/crlite_finetune
+# From-scratch (paper recipe) on the public A9 r02_s01 caches:
+#   pixi run train-hdf5 -- --model crlite --site a9_dataset_r02_s01 \
+#     --train-hdf5 datasets/a9_dataset_r02_s01/hdf5_cache/a9_r02_s01_train.h5 \
+#     --val-hdf5 datasets/a9_dataset_r02_s01/hdf5_cache/a9_r02_s01_val.h5 \
+#     --epochs 100 --warmup-epochs 5 --optimizer adam --scheduler cosine \
+#     --output-dir runs/crlite_a9_scratch
+train-hdf5 = { cmd = "python scripts/paper/train_hdf5.py", description = "Train/fine-tune on HDF5 caches (args after --; examples in pyproject.toml)" }
+
+# ---- Packaging / distribution --------------------------------------------
+# --no-isolation reuses the pixi env (hatchling is a pypi dependency below),
+# so the build works offline / behind proxies.
+build-wheel = { cmd = "python -m build --wheel --no-isolation", description = "Build dist/xcalib-<version>-py3-none-any.whl" }
+build-sdist = { cmd = "python -m build --sdist --no-isolation", description = "Build dist/xcalib-<version>.tar.gz source distribution" }
+
+# ---- HuggingFace Hub -------------------------------------------------------
+pull-weights = { cmd = "python -m xcalib.cli pull-weights", description = "Download one (model, site) weight set from the Hub" }
+pull-dataset = { cmd = "python -m xcalib.cli pull-dataset", description = "Download one split of a Hub-distributed dataset (A9)" }
+
+# ---- One-shot adaptation demo (synthetic geometry, runs on CPU) -----------
+oneshot-demo = { cmd = "python scripts/oneshot_demo.py", description = "End-to-end calibrate() + oneshot() demo on synthetic geometry (CPU)" }
+demo-media = { cmd = "python scripts/make_demo_media.py", description = "Regenerate docs/assets demo GIFs/posters from the A9 test cache (needs local weights + caches)" }
+
+# ---- Docs (MkDocs Material; deployed by .github/workflows/docs.yml) -------
+docs-serve = { cmd = "mkdocs serve", description = "Preview docs at http://127.0.0.1:8000 with live reload" }
+docs-build = { cmd = "mkdocs build --strict", description = "Build the docs site into site/ (fails on warnings, same as CI)" }
+check-public-docs = { cmd = "python scripts/check_public_docs.py", description = "Fail if public docs or package code expose private upload/release operations" }
+
+# ---- Misc -----------------------------------------------------------------
+demo = { cmd = "python scripts/infer_demo.py", description = "Single-frame inference demo (append -- --model/--weights/--device)" }
+benchmark = { cmd = "python scripts/paper/benchmark_thor.py --all --output reports/thor_latency.json --figure reports/thor_latency.png", description = "Full PyTorch latency benchmark, writes reports/thor_latency.{json,png}" }
+benchmark-quick = { cmd = "python scripts/paper/benchmark_thor.py --all --warmup 5 --iters 30", description = "Short latency benchmark (5 warmup / 30 iters, no report files)" }
+lint = { cmd = "ruff check .", description = "Ruff lint over src/, scripts/, tests/ (same as CI)" }
+smoke = { cmd = "python -m pytest tests/smoke -q", description = "Fast import + forward-pass smoke tests" }
+test = { cmd = "python -m pytest tests/ -q", description = "Full grouped pytest suite (offline; Hub/network tests are mocked)" }
+
+[tool.pixi.activation.env]
+KMP_DUPLICATE_LIB_OK = "TRUE"
+OMP_NUM_THREADS = "1"
+
+[tool.pixi.dependencies]
+# The dev env intentionally solves one known-good interpreter (3.12) so the
+# CUDA torch index pins below stay stable; the *published package* supports
+# Python >=3.10 with no cap, and CI exercises 3.10-3.14.
+python = ">=3.10,<3.13"
+numpy = ">=2.0,<3"
+pyyaml = ">=6.0,<7"
+h5py = ">=3.11,<4"
+loguru = ">=0.7,<0.8"
+tqdm = ">=4.67,<5"
+matplotlib = ">=3.9,<4"
+
+[tool.pixi.pypi-dependencies]
+# The package itself, editable from src/ — keeps scripts/tests importing the
+# same code the wheel ships, with zero sys.path hacks.
+xcalib = { path = ".", editable = true }
+opencv-python = ">=4.10,<5"
+onnx = ">=1.16,<2"
+onnxruntime = ">=1.18,<2"
+scipy = ">=1.13,<2"
+pytest = ">=8,<9"
+ruff = ">=0.6"
+huggingface_hub = ">=0.30"
+# Docs site (mkdocs.yml at root; API reference via mkdocstrings).
+mkdocs-material = ">=9.5"
+mkdocstrings = { version = ">=0.26", extras = ["python"] }
+# Wheel building (pixi run build-wheel) without build isolation.
+build = ">=1.2,<2"
+hatchling = ">=1.26"
+
+[tool.pixi.target.win-64.pypi-dependencies]
+torch = { version = "*", index = "https://download.pytorch.org/whl/cu128" }
+torchvision = { version = "*", index = "https://download.pytorch.org/whl/cu128" }
+
+[tool.pixi.target.linux-64.pypi-dependencies]
+torch = { version = "*", index = "https://download.pytorch.org/whl/cu128" }
+torchvision = { version = "*", index = "https://download.pytorch.org/whl/cu128" }
+
+[tool.pixi.target.osx-arm64.pypi-dependencies]
+torch = "*"
+torchvision = "*"
+
+# NVIDIA Jetson AGX Thor (SBSA aarch64 + Blackwell iGPU, JetPack 7 / CUDA 13).
+# Default PyPI now ships torch >= 2.12 with cp310/cp311/cp312 manylinux_2_28
+# aarch64 wheels that bundle a working CUDA-13 stack and run on Thor's iGPU
+# out of the box, so we just resolve from PyPI -- no special index needed.
+[tool.pixi.target.linux-aarch64.pypi-dependencies]
+torch = ">=2.12"
+torchvision = ">=0.27"

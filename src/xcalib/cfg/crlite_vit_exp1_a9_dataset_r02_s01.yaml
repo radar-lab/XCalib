@@ -1,0 +1,19 @@
+# CRLite-ViT Exp1 (Crop ViT + PointNet, no PE) — A9 r02_s01.
+model: crlite_vit_exp1
+device: auto
+num_classes: 10
+crop_size: 64
+point_cloud_size: 1024
+embed_dim: 256
+top_k: 10
+vit:
+  patch_size: 8
+  embed_dim: 256
+  depth: 6
+  num_heads: 8
+  mlp_ratio: 4.0
+  dropout: 0.0
+  attention_dropout: 0.0
+  pool: cls
+bbox_expansion: 1.25
+weights_path: checkpoints/crlite_vit_exp1_a9_dataset_r02_s01_best.pth

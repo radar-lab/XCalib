@@ -1,0 +1,72 @@
+{
+  "format": "xcalib-demo-frames-v1",
+  "site": null,
+  "split": "test",
+  "camera": "s110_camera_basler_south1_8mm",
+  "frames": [
+    {
+      "frame_key": "0001",
+      "detections": "frame_0000/detections.json"
+    },
+    {
+      "frame_key": "0005",
+      "detections": "frame_0001/detections.json"
+    },
+    {
+      "frame_key": "0007",
+      "detections": "frame_0002/detections.json"
+    },
+    {
+      "frame_key": "0008",
+      "detections": "frame_0003/detections.json"
+    },
+    {
+      "frame_key": "0010",
+      "detections": "frame_0004/detections.json"
+    },
+    {
+      "frame_key": "0011",
+      "detections": "frame_0005/detections.json"
+    },
+    {
+      "frame_key": "0012",
+      "detections": "frame_0006/detections.json"
+    },
+    {
+      "frame_key": "0017",
+      "detections": "frame_0007/detections.json"
+    },
+    {
+      "frame_key": "0019",
+      "detections": "frame_0008/detections.json"
+    },
+    {
+      "frame_key": "0020",
+      "detections": "frame_0009/detections.json"
+    },
+    {
+      "frame_key": "0021",
+      "detections": "frame_0010/detections.json"
+    },
+    {
+      "frame_key": "0022",
+      "detections": "frame_0011/detections.json"
+    },
+    {
+      "frame_key": "0023",
+      "detections": "frame_0012/detections.json"
+    },
+    {
+      "frame_key": "0024",
+      "detections": "frame_0013/detections.json"
+    },
+    {
+      "frame_key": "0030",
+      "detections": "frame_0014/detections.json"
+    },
+    {
+      "frame_key": "0031",
+      "detections": "frame_0015/detections.json"
+    }
+  ]
+}

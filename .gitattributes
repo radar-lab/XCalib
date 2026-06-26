@@ -1,0 +1,4 @@
+# Shell scripts must use LF endings even on Windows checkouts, otherwise
+# bash heredocs ("PY ... PY") fail with "unexpected end of file" because
+# the terminator becomes "PY\r" instead of "PY".
+*.sh text eol=lf

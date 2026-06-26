@@ -1,0 +1,19 @@
+# Minimal inference-only requirements for the xcalib package.
+# Mirrors the [tool.pixi.*] env in pyproject.toml. Use this if installing
+# with plain pip (e.g. on NVIDIA Jetson AGX Thor where JetPack ships its own
+# torch wheel).
+#
+# On Thor:
+#   pip install --no-deps -r requirements.txt
+#   pip install torch torchvision   # use JetPack's wheel; do NOT pull from PyPI
+numpy>=2.0,<3
+pyyaml>=6.0,<7
+h5py>=3.11,<4
+loguru>=0.7,<0.8
+tqdm>=4.67,<5
+opencv-python>=4.10,<5
+onnx>=1.16,<2
+onnxruntime>=1.18,<2
+scipy>=1.13,<2
+pytest>=8,<9
+huggingface_hub>=0.30

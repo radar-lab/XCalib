@@ -1,0 +1,38 @@
+__pycache__/
+*.py[cod]
+*.pth
+*.onnx
+*.engine
+.pixi/
+.pytest_cache/
+
+# Build / runtime artefacts (large, regeneratable).
+onnx/
+engines/
+dist/
+*.egg-info/
+site/
+
+# Runtime reports: frozen paper evidence lives in docs/evidence/. Keep root
+# reports/ for regenerated local outputs, bulky trtexec logs, and figures.
+reports/trt_logs/
+reports/_archive/
+reports/*.png
+reports/*.log
+reports/*.json
+
+# One-shot demo outputs (regenerate with `pixi run oneshot-demo`)
+reports/oneshot_demo/
+
+# Local training runs (checkpoints + history.json)
+runs/
+
+# HDF5 caches (distributed via the public HF dataset repo, see docs/hub.md)
+datasets/
+
+# Private/partner demo artifacts must not be committed to the public repo.
+demo/data/utc*.h5
+demo/frames/utc*/
+demo/weights/*utc*
+demo/onnx/*utc*
+demo/intrinsics_utc*.json

@@ -1,0 +1,8 @@
+{
+  "name": "a9_south2_8mm_example_replace_with_release_intrinsics",
+  "fx": 1418.0,
+  "fy": 1422.0,
+  "cx": 976.0,
+  "cy": 606.0,
+  "distortion": []
+}

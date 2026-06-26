@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check .
+      - name: Check public docs for private operations terms
+        run: python scripts/check_public_docs.py
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    # 3.14 is advisory for now: torch ships cp314 wheels since 2.9, but the
+    # TorchScript-based ONNX exporter we still use is deprecated there, so a
+    # red 3.14 job warns without blocking the pipeline.
+    continue-on-error: ${{ matrix.python-version == '3.14' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: System deps for opencv
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+      - name: Install (CPU torch)
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e .[dev]
+      # Checkpoint-dependent smoke tests auto-skip (*.pth is not in git);
+      # protocol / build / oneshot / hub / trainer tests run on CPU with
+      # random weights.
+      - name: Run tests
+        run: pytest tests/ -q
+
+  wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Build wheel + sdist
+        run: |
+          pip install build
+          python -m build
+      - name: Smoke-test wheel in a clean venv
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
+          /tmp/smoke/bin/pip install dist/*.whl
+          cd /tmp  # off the repo so only the installed wheel is importable
+          /tmp/smoke/bin/python -c "import xcalib; print(xcalib.__version__)"
+          /tmp/smoke/bin/python -c "from xcalib.utils.io import default_config_path; print(default_config_path('crlite', 'utc4'))"
+          /tmp/smoke/bin/xcalib version
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcalib-wheel
+          path: dist/*.whl
+          if-no-files-found: error

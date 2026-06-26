@@ -1,0 +1,13 @@
+# CRLite (Hybrid two-stage + Enhanced 3D PE) — UTC4 weights.
+model: crlite
+device: auto
+num_classes: 10
+crop_size: 32
+point_cloud_size: 1024
+embed_dim: 256
+token_len: 256
+top_k: 10
+max_depth: 100.0
+pe_mode: full
+bbox_expansion: 1.05
+weights_path: checkpoints/crlite_utc4_best.pth

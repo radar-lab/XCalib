@@ -1,0 +1,48 @@
+{
+  "_schema": "desktop_throughput_snapshot/v1",
+  "_provenance": {
+    "latex_label": "tab:supp-speed",
+    "description": "Manuscript-rounded RTX 5090 batch-1 throughput comparison (IEEE Sensors Letters Submission v3 supplementary). Operational PyTorch timings on utc_test remain in standalone_paper_validation_*.json."
+  },
+  "gpu": "NVIDIA RTX 5090",
+  "batch": 1,
+  "unit_latency_ms": "All timings as printed in supplementary Table tab:supp-speed (Pairwise quoted as 15.2 seconds in prose; exported here as milliseconds for one schema)",
+  "rows": [
+    {
+      "paper_alias": "Pairwise (CalibRefine)",
+      "latency_ms": 15200.0,
+      "latency_note": "15.2 s as printed in manuscript",
+      "speedup_vs_pairwise_x": 1,
+      "params_m": null,
+      "approx_model_slug": "calibrefine"
+    },
+    {
+      "paper_alias": "ResNet + 3D PE",
+      "latency_ms": 54.0,
+      "speedup_vs_pairwise_x": 281,
+      "params_m": 3.4,
+      "approx_model_slug": "crlite"
+    },
+    {
+      "paper_alias": "ResNet (no PE)",
+      "latency_ms": 18.0,
+      "speedup_vs_pairwise_x": 844,
+      "params_m": 1.8,
+      "approx_model_slug": "crlite_exp1"
+    },
+    {
+      "paper_alias": "ViT + 3D PE",
+      "latency_ms": 7.8,
+      "speedup_vs_pairwise_x": 1949,
+      "params_m": 5.0,
+      "approx_model_slug": "crlite_vit_exp3"
+    },
+    {
+      "paper_alias": "ViT (no PE)",
+      "latency_ms": 7.8,
+      "speedup_vs_pairwise_x": 1949,
+      "params_m": 3.2,
+      "approx_model_slug": "crlite_vit_exp1"
+    }
+  ]
+}

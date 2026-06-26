@@ -1,0 +1,23 @@
+[workspace]
+authors = ["RADAR Lab"]
+channels = ["conda-forge"]
+platforms = ["linux-aarch64", "linux-64", "win-64"]
+
+[dependencies]
+python = ">=3.10,<3.13"
+h5py = ">=3.11,<4"
+numpy = ">=2.0,<3"
+
+[pypi-dependencies]
+xcalib = { path = "wheels/xcalib-0.1.0-py3-none-any.whl", extras = ["onnx"] }
+
+[activation.env]
+# Windows: torch/MKL and onnxruntime/opencv each bundle an OpenMP runtime; allow
+# both to load. The demo is inference-only, so the duplicate-runtime risk is moot.
+KMP_DUPLICATE_LIB_OK = "TRUE"
+
+[tasks]
+run-00 = "python run_00_prepare_assets.py"
+run-01 = "python run_01_match_one_frame.py"
+run-02 = "python run_02_calibrate_stream.py"
+run-03 = "python run_03_full_demo.py"

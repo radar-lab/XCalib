@@ -1,0 +1,10 @@
+# CalibRefine (Pairwise baseline: Bottleneck ResNet + PointNet2 + 2D PE) — UTC3.
+model: calibrefine
+device: auto
+num_classes: 10
+crop_size: 32
+point_cloud_size: 1024
+token_len: 256
+num_blocks: [2, 2, 2, 2]
+bbox_expansion: 1.05
+weights_path: checkpoints/calibrefine_utc3_best.pth

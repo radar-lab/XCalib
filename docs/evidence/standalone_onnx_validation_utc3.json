@@ -1,0 +1,101 @@
+{
+  "site": "utc3",
+  "hdf5": "<institutional_utc_root>/utc_dataset3/hdf5_cache/utc_test.h5",
+  "providers": [
+    "CPUExecutionProvider"
+  ],
+  "onnx_dirs": {
+    "crlite": "onnx/crlite_utc3",
+    "crlite_2dpe": "onnx/crlite_2dpe_utc3",
+    "crlite_vit_exp1": "onnx/crlite_vit_exp1_utc3",
+    "crlite_vit_exp3": "onnx/crlite_vit_exp3_utc3",
+    "calibrefine": "onnx/calibrefine_utc3"
+  },
+  "results": {
+    "crlite": {
+      "top1": 0.9646365422396856,
+      "top3": 0.9941060903732809,
+      "mrr": 0.9788801571709232,
+      "n_frames": 50,
+      "n_cameras_with_match": 509,
+      "latency_ms_mean": 50.915919637773186,
+      "latency_ms_p50": 50.482027989346534,
+      "latency_ms_p95": 65.89420840027742,
+      "latency_ms_p99": 74.91826345794831,
+      "latency_ms_std": 8.309971163926198,
+      "latency_ms_min": 29.056474042590708,
+      "latency_ms_max": 81.09363302355632,
+      "throughput_fps_mean": 19.6402226870145,
+      "n_iters": 50,
+      "wall_seconds": 8.883983266016003
+    },
+    "crlite_2dpe": {
+      "top1": 0.9783889980353635,
+      "top3": 1.0,
+      "mrr": 0.988867059593975,
+      "n_frames": 50,
+      "n_cameras_with_match": 509,
+      "latency_ms_mean": 51.389765463536605,
+      "latency_ms_p50": 49.762014008592814,
+      "latency_ms_p95": 67.57135565276258,
+      "latency_ms_p99": 70.23198958602734,
+      "latency_ms_std": 8.226187722793082,
+      "latency_ms_min": 41.07104695867747,
+      "latency_ms_max": 70.79020200762898,
+      "throughput_fps_mean": 19.459127532106482,
+      "n_iters": 50,
+      "wall_seconds": 8.795036889030598
+    },
+    "crlite_vit_exp1": {
+      "top1": 0.925343811394892,
+      "top3": 0.9862475442043221,
+      "mrr": 0.9559058737595082,
+      "n_frames": 50,
+      "n_cameras_with_match": 509,
+      "latency_ms_mean": 89.53884331742302,
+      "latency_ms_p50": 87.27630399516784,
+      "latency_ms_p95": 122.19504776294342,
+      "latency_ms_p99": 133.8456444069743,
+      "latency_ms_std": 19.15376215302676,
+      "latency_ms_min": 64.17512201005593,
+      "latency_ms_max": 141.08592801494524,
+      "throughput_fps_mean": 11.168337259561335,
+      "n_iters": 50,
+      "wall_seconds": 10.779128778958693
+    },
+    "crlite_vit_exp3": {
+      "top1": 0.9174852652259332,
+      "top3": 0.9960707269155207,
+      "mrr": 0.9556974459724951,
+      "n_frames": 50,
+      "n_cameras_with_match": 509,
+      "latency_ms_mean": 89.50002797180787,
+      "latency_ms_p50": 85.04203800112009,
+      "latency_ms_p95": 117.64860789407976,
+      "latency_ms_p99": 136.99841187975832,
+      "latency_ms_std": 18.102675513110178,
+      "latency_ms_min": 66.26282195793465,
+      "latency_ms_max": 143.41201598290354,
+      "throughput_fps_mean": 11.173180865541134,
+      "n_iters": 50,
+      "wall_seconds": 10.743012020015158
+    },
+    "calibrefine": {
+      "top1": 0.9194499017681729,
+      "top3": 0.9901768172888016,
+      "mrr": 0.9552577416035175,
+      "n_frames": 50,
+      "n_cameras_with_match": 509,
+      "latency_ms_mean": 6360.896652741358,
+      "latency_ms_p50": 4501.933750027092,
+      "latency_ms_p95": 10558.867937128525,
+      "latency_ms_p99": 11455.314990169718,
+      "latency_ms_std": 2766.451864249221,
+      "latency_ms_min": 2748.9764930214733,
+      "latency_ms_max": 11629.807232995518,
+      "throughput_fps_mean": 0.15721054036761148,
+      "n_iters": 50,
+      "wall_seconds": 432.2173784810002
+    }
+  }
+}

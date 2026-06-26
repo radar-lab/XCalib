@@ -1,0 +1,66 @@
+site_name: XCalib
+site_description: Camera-LiDAR cross-modal matching for edge devices
+site_url: https://radar-lab.github.io/XCalib/
+repo_url: https://github.com/radar-lab/XCalib
+repo_name: radar-lab/XCalib
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_source: false
+            show_root_heading: true
+            members_order: source
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+nav:
+  - Home: index.md
+  - Quick start: quick-start.md
+  - Guides:
+      - Input protocol: protocol.md
+      - Visualization: visualization.md
+      - Models and datasets: hub.md
+      - HDF5 cache format: hdf5-format.md
+      - Custom models: adding-models.md
+  - Reference:
+      - API reference: api.md
+  - Paper:
+      - Reproducing the paper: paper.md
+      - Frozen artefacts: evidence/index.md

@@ -1,0 +1,32 @@
+﻿# CRLite-ViT Exp4 (ViT + Structure-Aware GNN), UTC4 weights.
+#
+# Replaces absolute position encoding with two relational GNNs (camera-side
+# over 2D bboxes, LiDAR-side over 3D centers). State-dict keys match the
+# trained checkpoint exactly.
+model: crlite_vit_exp4
+device: auto
+crop_size: 64
+point_cloud_size: 1024
+embed_dim: 256
+top_k: 10
+image_width: 1920
+image_height: 1080
+
+vit:
+  patch_size: 8
+  embed_dim: 256
+  depth: 6
+  num_heads: 8
+  mlp_ratio: 4.0
+  dropout: 0.0
+  attention_dropout: 0.0
+  pool: cls
+
+gnn:
+  edge_dim: 8
+  hidden_dim: 128
+  num_layers: 2
+  k_neighbors: 4
+  dropout: 0.1
+
+weights_path: checkpoints/crlite_vit_exp4_utc4_best.pth

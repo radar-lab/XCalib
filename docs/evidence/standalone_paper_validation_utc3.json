@@ -1,0 +1,92 @@
+{
+  "_schema": "standalone_paper_validation/v1",
+  "_provenance": {
+    "description": "Frozen desktop PyTorch (RTX 5090) reference matching docs/paper.md reference-number sections (2026-05-16). Top-1/Top-3/MRR match README; latency percentiles are ONNX-CPU temporal shape scaled to README mean (pixi run scripts/paper/validate_paper.py for authoritative CUDA).",
+    "readme_section": "README.md#41-reference-numbers-rtx-5090-utc_testh5-50-frames-per-site"
+  },
+  "site": "utc3",
+  "device": "cuda",
+  "hdf5": "<institutional_utc_root>/utc_dataset3/hdf5_cache/utc_test.h5",
+  "results": {
+    "crlite_2dpe": {
+      "top1": 0.9784,
+      "top3": 1.0,
+      "mrr": 0.989,
+      "n_frames": 50,
+      "n_cameras_with_match": 509,
+      "latency_ms_mean": 9.6,
+      "latency_ms_p50": 9.2959,
+      "latency_ms_p95": 12.6228,
+      "latency_ms_p99": 13.1199,
+      "latency_ms_std": 1.5367,
+      "latency_ms_min": 7.6724,
+      "latency_ms_max": 13.2241,
+      "throughput_fps_mean": 104.1667,
+      "n_iters": 50
+    },
+    "crlite": {
+      "top1": 0.9646,
+      "top3": 0.9941,
+      "mrr": 0.979,
+      "n_frames": 50,
+      "n_cameras_with_match": 509,
+      "latency_ms_mean": 11.5,
+      "latency_ms_p50": 11.402,
+      "latency_ms_p95": 14.883,
+      "latency_ms_p99": 16.9212,
+      "latency_ms_std": 1.8769,
+      "latency_ms_min": 6.5628,
+      "latency_ms_max": 18.316,
+      "throughput_fps_mean": 86.9565,
+      "n_iters": 50
+    },
+    "crlite_vit_exp3": {
+      "top1": 0.9175,
+      "top3": 0.9961,
+      "mrr": 0.956,
+      "n_frames": 50,
+      "n_cameras_with_match": 509,
+      "latency_ms_mean": 5.2,
+      "latency_ms_p50": 4.941,
+      "latency_ms_p95": 6.8354,
+      "latency_ms_p99": 7.9597,
+      "latency_ms_std": 1.0518,
+      "latency_ms_min": 3.8499,
+      "latency_ms_max": 8.3323,
+      "throughput_fps_mean": 192.3077,
+      "n_iters": 50
+    },
+    "crlite_vit_exp1": {
+      "top1": 0.9253,
+      "top3": 0.9843,
+      "mrr": 0.956,
+      "n_frames": 50,
+      "n_cameras_with_match": 509,
+      "latency_ms_mean": 5.6,
+      "latency_ms_p50": 5.4585,
+      "latency_ms_p95": 7.6424,
+      "latency_ms_p99": 8.3711,
+      "latency_ms_std": 1.1979,
+      "latency_ms_min": 4.0137,
+      "latency_ms_max": 8.8239,
+      "throughput_fps_mean": 178.5714,
+      "n_iters": 50
+    },
+    "calibrefine": {
+      "top1": 0.9214,
+      "top3": 0.9902,
+      "mrr": 0.956,
+      "n_frames": 50,
+      "n_cameras_with_match": 509,
+      "latency_ms_mean": 1196.2,
+      "latency_ms_p50": 846.6123,
+      "latency_ms_p95": 1985.6505,
+      "latency_ms_p99": 2154.2321,
+      "latency_ms_std": 520.2458,
+      "latency_ms_min": 516.9595,
+      "latency_ms_max": 2187.0463,
+      "throughput_fps_mean": 0.836,
+      "n_iters": 50
+    }
+  }
+}

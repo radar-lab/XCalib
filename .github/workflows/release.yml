@@ -1,0 +1,94 @@
+name: Release
+
+# Manual release workflow. To publish, run this workflow from a version tag:
+#
+#   v0.1.0
+#
+# One-time setup: register this repo + workflow as a trusted publisher for the
+# `XCalib` project on pypi.org. No API tokens.
+#
+# Dry runs:
+#   - Run from a branch with both publish inputs false to build sdist+wheel only.
+#   - Run from a tag with publish inputs false to version-check and build only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_pypi:
+        description: "Publish to PyPI via Trusted Publishing"
+        required: true
+        default: false
+        type: boolean
+      create_github_release:
+        description: "Create a GitHub Release with built artifacts"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist + wheel
+        run: |
+          pip install build
+          python -m build
+      # Manual dry runs from branches install and report the version instead of
+      # comparing against a tag.
+      - name: Check tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          pip install dist/*.whl
+          PKG_VERSION=$(python -c "import xcalib; print(xcalib.__version__)")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package version $PKG_VERSION" >&2
+            exit 1
+          fi
+      - name: Smoke-test wheel (dry run)
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        run: |
+          pip install dist/*.whl
+          python -c "import xcalib; print('dry run: built', xcalib.__version__)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish-pypi:
+    # Gated to the public repo registered as the PyPI trusted publisher.
+    if: inputs.publish_pypi && startsWith(github.ref, 'refs/tags/v') && github.repository == 'radar-lab/XCalib'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/XCalib
+    permissions:
+      id-token: write  # OIDC for PyPI Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    if: inputs.create_github_release && startsWith(github.ref, 'refs/tags/v') && github.repository == 'radar-lab/XCalib'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

@@ -1,0 +1,53 @@
+name: Docs
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy to GitHub Pages after a strict docs build"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write          # lets configure-pages enable Pages on first deploy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      # mkdocstrings-python analyzes the source statically (griffe), so the
+      # docs build needs no torch install.
+      - run: pip install mkdocs-material "mkdocstrings[python]"
+      - run: mkdocs build --strict
+      - uses: actions/configure-pages@v5
+        if: inputs.deploy
+        with:
+          enablement: true   # turn on GitHub Pages (Actions source) if not already
+      - uses: actions/upload-pages-artifact@v3
+        if: inputs.deploy
+        with:
+          path: site/
+
+  deploy:
+    # Pages deploy only when manually requested from the official public repo.
+    if: inputs.deploy && github.repository == 'radar-lab/XCalib'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
