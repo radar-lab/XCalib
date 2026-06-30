@@ -11,9 +11,11 @@ workstation and an NVIDIA Jetson AGX Thor, and builds on the lab's prior calibra
 [CalibRefine](https://github.com/radar-lab/Lidar_Camera_Automatic_Calibration) (Cheng et al., IEEE
 TIM 2026, [arXiv:2502.17648](https://arxiv.org/abs/2502.17648)).
 
-> **Status** — public staging snapshot, not the final official release. Release
-> tags, PyPI publishing, and the official version will be cut after final
-> confirmation.
+> **Status** — publicly released and actively developed. The public API
+> (`xcalib.__all__`) is stable across minor versions; internals may change
+> without notice. Broader visibility is expected once the accompanying IEEE
+> Sensors Letters paper is published. New versions are cut from `main` as tagged
+> releases.
 
 ## Install
 

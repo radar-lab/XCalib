@@ -244,17 +244,17 @@ def has_onnx_artifacts(onnx_dir: Path) -> bool:
 
 def print_asset_status(
     *,
-    wheel_dir: Path,
     weights_path: Path,
     onnx_dir: Path,
     dataset_path: Path,
 ) -> None:
-    wheels = sorted(wheel_dir.glob("*.whl")) if wheel_dir.is_dir() else []
     print("\nasset status")
-    if wheels:
-        print(f"  wheel already available: {wheels[-1]}")
-    else:
-        print(f"  wheel missing: {wheel_dir}")
+    try:
+        import xcalib
+
+        print(f"  xcalib {xcalib.__version__} installed ({Path(xcalib.__file__).resolve().parent})")
+    except ImportError:
+        print("  xcalib not importable — run `pixi install`")
 
     if weights_path.exists():
         print(f"  weights already available: {weights_path}")
@@ -311,11 +311,14 @@ def calibrate_when_ready(
         return False
 
     state.last_result = session.calibrate(min_pairs=min_pairs)
-    if state.last_result.success:
+    # Since 0.2, calibrate() may solve successfully yet reject a degenerate
+    # planar pose (result.accepted is False); only stop once an accepted
+    # calibration lands.
+    if state.last_result.success and state.last_result.accepted:
         print_calibration(state.last_result)
         return True
 
-    if not_ready_prefix is not None:
+    if not_ready_prefix is not None and not state.last_result.success:
         print(f"{not_ready_prefix}calibration not ready: {state.last_result.message}")
     return False
 

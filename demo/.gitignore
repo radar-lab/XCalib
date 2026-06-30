@@ -4,3 +4,6 @@ onnx_export/
 
 # match-overlay output from run_02
 viz/
+
+# Jupyter autosave dirs (xcalib_quickstart.ipynb)
+.ipynb_checkpoints/

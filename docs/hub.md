@@ -55,6 +55,20 @@ from xcalib import load_dataset
 loader = load_dataset("a9_dataset_r02_s01", split="test")
 ```
 
+!!! warning "Multi-camera frames"
+    A9 caches store detections from *both* `s110` cameras in a single frame —
+    `frame.bboxes_2d` spans both cameras (tagged per box by
+    `frame.camera_per_det`), and `frame.images` holds each camera's image. Pairing
+    the full `bboxes_2d` with one camera's image mixes two pixel coordinate
+    systems (you'd match/plot two cameras at once). Use `frame.for_camera(name)` to
+    get the `(image, point_cloud, bboxes_2d, bboxes_3d)` for **one** camera:
+
+    ```python
+    for frame in loader:
+        image, pc, b2, b3 = frame.for_camera("s110_camera_basler_south1_8mm")
+        result = matcher.match(image, pc, b2, b3)
+    ```
+
 You can also pre-fetch a split:
 
 ```bash

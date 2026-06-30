@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 import torch
 
-from xcalib import CameraIntrinsics, Matcher  # noqa: E402
+from xcalib import CalibrationResult, CameraIntrinsics, Matcher  # noqa: E402
 from xcalib.oneshot import (  # noqa: E402
     AdaptedModel,
     CalibrationSession,
@@ -159,6 +159,102 @@ def test_calibration_session_solves_across_frames():
 
     short = CalibrationSession()
     assert not short.solve(K_GT).success
+
+
+def test_calibration_session_reprojection_error():
+    """Buffer-wide reprojection exposes a bad pose that inlier error would hide."""
+    rng = np.random.default_rng(7)
+    pts3 = _sample_visible_centers(rng, 16)
+    uv, _ = project_points(pts3, K_GT, R_GT, T_GT)
+    session = CalibrationSession()
+    session.add_correspondences(uv, pts3)
+
+    good = session.solve(K_GT, min_pairs=6)
+    assert good.success
+    # The recovered pose reprojects tightly over *all* buffered pairs.
+    assert session.reprojection_error(good, reduce="median") < 1.0
+    assert session.reprojection_error(good, reduce="max") < 5.0
+
+    # A deliberately shifted pose is cheap to miss on a hand-picked inlier set
+    # but is exposed when scored over the whole buffer.
+    bad = CalibrationResult(
+        success=True, intrinsics=K_GT, rotation=R_GT,
+        translation=T_GT + np.array([4.0, 4.0, 4.0]),
+    )
+    assert session.reprojection_error(bad) > 20.0
+
+    # Failed result or empty buffer -> inf; unknown reducer -> error.
+    assert session.reprojection_error(CalibrationResult(success=False)) == float("inf")
+    assert CalibrationSession().reprojection_error(good) == float("inf")
+    with pytest.raises(ValueError):
+        session.reprojection_error(good, reduce="p95")
+
+
+def test_calibration_result_pose_error():
+    """Geodesic rotation + translation error vs a ground-truth extrinsic."""
+    t = np.array([1.0, 2.0, 3.0])
+    res = CalibrationResult(success=True, rotation=np.eye(3), translation=t)
+
+    gt = np.eye(4)
+    gt[:3, 3] = t
+    rot, trans = res.pose_error(gt)  # identical pose -> zero error
+    assert rot == pytest.approx(0.0, abs=1e-6)
+    assert trans == pytest.approx(0.0, abs=1e-6)
+
+    gt2 = np.eye(4)
+    gt2[:3, :3] = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], float)  # 90deg about z
+    gt2[:3, 3] = t + np.array([0.0, 0.0, 1.0])
+    rot2, trans2 = res.pose_error(gt2)
+    assert rot2 == pytest.approx(90.0, abs=1e-4)
+    assert trans2 == pytest.approx(1.0, abs=1e-6)
+
+    with pytest.raises(RuntimeError):
+        CalibrationResult(success=False).pose_error(np.eye(4))
+
+
+def test_oneshot_calibrate_disambiguation_gate(vit_exp1_matcher):
+    """0.2 gating: accept-latest, the observe()-flow warm-up, the relative
+    gate, and the disambiguate=False escape hatch."""
+    session = vit_exp1_matcher.oneshot(K_GT)
+    rng = np.random.default_rng(123)
+
+    def feed(n):
+        pts3 = _sample_visible_centers(rng, n)
+        uv, _ = project_points(pts3, K_GT, R_GT, T_GT)
+        session.calib_session.add_correspondences(uv, pts3)
+
+    # A directly-fed buffer (no observed frames) is trusted despite the warm-up.
+    feed(16)
+    first = session.calibrate(min_pairs=12)
+    assert first.success and first.accepted and session.is_calibrated
+    assert first.buffer_reproj_px < 1.0
+    assert session.best_reproj_px == pytest.approx(first.buffer_reproj_px)
+
+    # Accept-latest: more clean pairs -> the newest solve is adopted.
+    feed(16)
+    second = session.calibrate(min_pairs=12)
+    assert second.accepted and session.calibration is second
+
+    # Warm-up: once frames are streamed, an early solve is held back...
+    session._frame_count = 1  # pretend one observe() has happened
+    held = session.calibrate(min_pairs=12)
+    assert held.success and not held.accepted
+    assert session.calibration is second  # previous calibration retained
+    # ...but the pre-0.2 escape hatch still adopts it.
+    forced = session.calibrate(min_pairs=12, disambiguate=False)
+    assert forced.success and forced.accepted and session.calibration is forced
+
+    # Relative gate: against a near-perfect prior, a ~1px solve is "too far".
+    session._frame_count = 0
+    session.best_reproj_px = 1e-3
+    keep = session.calibration
+    session.calib_session.clear()
+    pts3 = _sample_visible_centers(rng, 16)
+    uv, _ = project_points(pts3, K_GT, R_GT, T_GT)
+    session.calib_session.add_correspondences(uv + rng.normal(0, 1.5, uv.shape), pts3)
+    gated = session.calibrate(min_pairs=12)
+    assert gated.success and not gated.accepted  # ~1px > 2 * 1e-3
+    assert session.calibration is keep
 
 
 def test_bbox3d_centers_heuristic():

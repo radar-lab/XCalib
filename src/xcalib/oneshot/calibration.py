@@ -73,6 +73,15 @@ class CalibrationResult:
     n_inliers: int = 0
     reproj_error_px: float = float("inf")       # mean over inliers
     message: str = ""
+    #: Median reprojection error over ALL buffered pairs (not just inliers),
+    #: stamped by ``OneShotSession.calibrate``. ``nan`` when not scored. Unlike
+    #: ``reproj_error_px``, this exposes a degenerate planar pose (see
+    #: ``CalibrationSession.reprojection_error``).
+    buffer_reproj_px: float = float("nan")
+    #: Whether ``OneShotSession.calibrate`` adopted this solve as the session
+    #: calibration. ``False`` means a successful PnP solve was rejected by the
+    #: degenerate-pose gate. Always ``True`` for ungated / single-frame solves.
+    accepted: bool = True
 
     @property
     def extrinsics(self) -> Optional[np.ndarray]:
@@ -80,6 +89,28 @@ class CalibrationResult:
         if self.rotation is None or self.translation is None:
             return None
         return np.hstack([self.rotation, self.translation.reshape(3, 1)])
+
+    def pose_error(self, gt_extrinsics: np.ndarray) -> Tuple[float, float]:
+        """Accuracy of this solve against a ground-truth extrinsic.
+
+        ``gt_extrinsics`` is a 4x4 (or 3x4) lidar->camera pose — e.g.
+        ``UTCFrame.extrinsics[camera]`` from an A9 cache. Returns
+        ``(rotation_deg, translation_m)``: the geodesic rotation angle and the
+        Euclidean translation distance between the estimated ``[R|t]`` and the
+        ground truth, the camera-pose errors a paper-style table reports.
+        """
+        if not self.success or self.rotation is None or self.translation is None:
+            raise RuntimeError(f"Calibration unavailable: {self.message or 'solve failed'}")
+        gt = np.asarray(gt_extrinsics, dtype=np.float64)
+        if gt.shape == (4, 4):
+            gt = gt[:3]
+        if gt.shape != (3, 4):
+            raise ValueError(f"gt_extrinsics must be 3x4 or 4x4, got {gt.shape}")
+        R_gt, t_gt = gt[:, :3], gt[:, 3]
+        cos = (np.trace(self.rotation @ R_gt.T) - 1.0) / 2.0
+        rotation_deg = float(np.degrees(np.arccos(np.clip(cos, -1.0, 1.0))))
+        translation_m = float(np.linalg.norm(self.translation - t_gt))
+        return rotation_deg, translation_m
 
     def project(self, points_3d: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Project LiDAR-frame points to pixels.
@@ -144,6 +175,11 @@ def estimate_projection(
     Pipeline: EPnP-seeded RANSAC -> Levenberg-Marquardt refinement on the
     inlier set. Returns a failed CalibrationResult (success=False) instead
     of raising when the geometry is insufficient.
+
+    A single planar frame is bistable (the clump pose); accumulating spread
+    across frames via :class:`CalibrationSession` / :meth:`OneShotSession.calibrate`
+    (which scores solves over the whole buffer and accept-latest) is the path
+    that disambiguates it — a single solve cannot.
     """
     pts3 = np.ascontiguousarray(np.asarray(points_3d, dtype=np.float64).reshape(-1, 3))
     pts2 = np.ascontiguousarray(np.asarray(points_2d, dtype=np.float64).reshape(-1, 2))
@@ -317,3 +353,35 @@ class CalibrationSession:
         else:
             logger.warning(f"Calibration failed: {result.message}")
         return result
+
+    def reprojection_error(
+        self,
+        result: CalibrationResult,
+        *,
+        reduce: str = "median",
+    ) -> float:
+        """Reprojection error of ``result`` measured over *all* buffered pairs.
+
+        ``CalibrationResult.reproj_error_px`` is the mean over the RANSAC
+        *inlier* subset only. Roadside / infrastructure scenes are nearly
+        planar — every box centre sits on the road — which admits the classic
+        two-fold planar-PnP pose ambiguity. The spurious pose folds the whole
+        cloud into a clump yet still nails its own inliers, so it can report a
+        *lower* inlier error than the correct pose. Scoring the pose against the
+        entire buffer exposes it: the bad pose's error stays high.
+
+        Use this (``reduce="median"`` for robustness) to disambiguate or gate a
+        solve rather than trusting ``reproj_error_px`` alone — this is exactly
+        what ``OneShotSession.calibrate`` does by default. Returns ``inf`` for a
+        failed result or an empty buffer.
+        """
+        if not result.success or not self._scores:
+            return float("inf")
+        pts3 = np.asarray(self._pts3d, dtype=np.float64)
+        pts2 = np.asarray(self._pts2d, dtype=np.float64)
+        uv, _ = project_points(pts3, result.intrinsics, result.rotation, result.translation)
+        err = np.linalg.norm(uv - pts2, axis=1)
+        reducers = {"median": np.median, "mean": np.mean, "max": np.max}
+        if reduce not in reducers:
+            raise ValueError(f"reduce must be one of {sorted(reducers)}, got {reduce!r}")
+        return float(reducers[reduce](err))

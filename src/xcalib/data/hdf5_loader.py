@@ -47,6 +47,77 @@ class UTCFrame:
     # camera_name, so single-image callers keep working unchanged.
     images: Dict[str, np.ndarray] = field(default_factory=dict)
     camera_per_det: Optional[np.ndarray] = None  # [K] str
+    # Per-camera calibration, present when the cache ships a `/calibration` group
+    # (A9); empty for caches without it (UTC). `intrinsics[cam]` is a 3x3 pinhole
+    # K; `extrinsics[cam]` is this frame's 4x4 lidar->camera pose (ground truth,
+    # for validating a targetless solve).
+    intrinsics: Dict[str, np.ndarray] = field(default_factory=dict)
+    extrinsics: Dict[str, np.ndarray] = field(default_factory=dict)
+
+    def for_camera(
+        self, camera: str
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Return ``(image, point_cloud, bboxes_2d, bboxes_3d)`` for one camera.
+
+        Multi-camera caches (e.g. A9 ``south1`` + ``south2``) store *every*
+        camera's 2D detections in a single frame, tagged by
+        :attr:`camera_per_det`. Pairing the full ``bboxes_2d`` with one camera's
+        image mixes two pixel coordinate systems (you'd match/plot two cameras at
+        once); this keeps only ``camera``'s 2D boxes alongside that camera's
+        image. The point cloud and 3D boxes are sensor-global and pass through
+        unchanged. Raises ``KeyError`` if ``camera`` has no image in this frame.
+        """
+        if camera not in self.images:
+            raise KeyError(
+                f"camera {camera!r} not in frame {self.frame_key}; "
+                f"available: {sorted(self.images)}"
+            )
+        if self.camera_per_det is None:
+            mask = np.ones(len(self.bboxes_2d), dtype=bool)
+        else:
+            mask = np.asarray(self.camera_per_det).astype(str) == camera
+        return self.images[camera], self.point_cloud, self.bboxes_2d[mask], self.bboxes_3d
+
+
+def _read_calibration(
+    f: "h5py.File", frame_key: str
+) -> tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+    """Read per-camera ``(intrinsics 3x3, this-frame extrinsics 4x4)`` from a
+    ``/calibration`` group. Returns ``({}, {})`` for caches without one (UTC).
+
+    Layout (A9):
+        /calibration/<camera>/intrinsics              - [3, 3]
+        /calibration/<camera>/extrinsics/<frame_key>  - [4, 4]  (per frame)
+    """
+    intr: Dict[str, np.ndarray] = {}
+    extr: Dict[str, np.ndarray] = {}
+    grp = f.get("calibration")
+    if grp is None:
+        return intr, extr
+
+    # Calibration keys can drop the sensor prefix (A9: `camera_basler_south1_8mm`)
+    # while the image stream keeps it (`s110_camera_basler_south1_8mm`). Normalise
+    # to the image-stream name so `frame.intrinsics[cam]` keys like `frame.images`.
+    image_cams = list(f["images"].keys()) if "images" in f else []
+
+    def canonical(cal_cam: str) -> str:
+        for ic in image_cams:
+            if ic == cal_cam or ic.endswith(cal_cam):
+                return ic
+        return cal_cam
+
+    for cam in grp.keys():
+        key = canonical(cam)
+        cam_grp = grp[cam]
+        if "intrinsics" in cam_grp:
+            intr[key] = np.asarray(cam_grp["intrinsics"][()], dtype=np.float64)
+        ex = cam_grp.get("extrinsics")
+        if isinstance(ex, h5py.Group):
+            if frame_key in ex:
+                extr[key] = np.asarray(ex[frame_key][()], dtype=np.float64)
+        elif ex is not None:  # a single [4, 4] for the whole sequence
+            extr[key] = np.asarray(ex[()], dtype=np.float64)
+    return intr, extr
 
 
 class UTCFrameLoader:
@@ -179,6 +250,7 @@ class UTCFrameLoader:
             logger.warning(f"Failed to load point cloud for frame {frame_key}: {e}")
             return None
 
+        intrinsics, extrinsics = _read_calibration(f, str(frame_key))
         return UTCFrame(
             frame_key=str(frame_key),
             image=img,
@@ -189,4 +261,6 @@ class UTCFrameLoader:
             camera_name=camera_name,
             images=images,
             camera_per_det=cam_per_det,
+            intrinsics=intrinsics,
+            extrinsics=extrinsics,
         )

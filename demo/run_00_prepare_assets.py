@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from demo_common import has_onnx_artifacts, load_demo_matcher, print_asset_status
-from demo_config import DEVICE, LOCAL_DATASET, LOCAL_WEIGHTS, MODEL, ONNX_DIR, SITE, WHEELS_DIR
+from demo_config import DEVICE, LOCAL_DATASET, LOCAL_WEIGHTS, MODEL, ONNX_DIR, SITE
 
 
 def main() -> int:
     print_asset_status(
-        wheel_dir=WHEELS_DIR,
         weights_path=LOCAL_WEIGHTS,
         onnx_dir=ONNX_DIR,
         dataset_path=LOCAL_DATASET,

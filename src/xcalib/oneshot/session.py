@@ -137,6 +137,9 @@ class OneShotSession:
         )
         self.bank = FeatureBank(capacity=bank_capacity, seed=seed)
         self.calibration: Optional[CalibrationResult] = None
+        #: Lowest full-buffer reprojection error (px) seen across solves — the
+        #: gate reference for the degenerate-pose rejection in `calibrate`.
+        self.best_reproj_px: float = float("inf")
 
         self._replay: Deque[Tuple[FrameData, List[Tuple[int, int, float]]]] = deque(
             maxlen=int(replay_frames)
@@ -206,11 +209,59 @@ class OneShotSession:
         self._frame_count += 1
         return report
 
-    def calibrate(self, *, min_pairs: int = 12) -> CalibrationResult:
-        """Solve / refresh the projection matrix from the buffered pairs."""
+    def calibrate(
+        self,
+        *,
+        min_pairs: int = 12,
+        disambiguate: bool = True,
+        gate_factor: float = 2.0,
+        min_frames: int = 3,
+    ) -> CalibrationResult:
+        """Solve / refresh the projection matrix from the buffered pairs.
+
+        With ``disambiguate=True`` (default since 0.2), the solve is scored over
+        *all* buffered pairs and only adopted as ``self.calibration`` if it is
+        not a degenerate planar-pose "clump". Roadside scenes are nearly planar,
+        so PnP is bistable: the clump pose has a deceptively low *inlier* error
+        but a high full-buffer error (:meth:`CalibrationSession.reprojection_error`).
+        The gate is **accept-latest within ``gate_factor`` × the best full-buffer
+        error seen**, after a ``min_frames`` warm-up — so the calibration keeps
+        refining as objects sweep the scene while rejecting the clump. The
+        warm-up only applies to the streaming :meth:`observe` flow; a buffer fed
+        directly (e.g. via ``calib_session.add_correspondences``) is trusted.
+        Pass ``disambiguate=False`` for the pre-0.2 behaviour (adopt any
+        successful solve).
+
+        Returns the solve result. ``result.accepted`` reports whether it became
+        the session calibration and ``result.buffer_reproj_px`` its full-buffer
+        score; a rejected solve leaves the previous ``self.calibration`` intact.
+        """
         result = self.calib_session.solve(self.intrinsics, min_pairs=min_pairs)
-        if result.success:
+        if not result.success:
+            return result
+
+        if not disambiguate:
             self.calibration = result
+            return result
+
+        buffer_px = self.calib_session.reprojection_error(result, reduce="median")
+        result.buffer_reproj_px = buffer_px
+        # Track the running best (the clump never holds the minimum), then
+        # accept the latest solve unless it is a gross outlier versus it. The
+        # warm-up applies only to the streaming observe() flow (where the first
+        # frame or two is degenerate); when the buffer is fed directly — no
+        # frames observed — we trust the caller and let the gate alone decide.
+        self.best_reproj_px = min(self.best_reproj_px, buffer_px)
+        warming_up = 0 < self._frame_count < min_frames
+        accept = (not warming_up) and buffer_px <= gate_factor * self.best_reproj_px
+        result.accepted = bool(accept)
+        if accept:
+            self.calibration = result
+        else:
+            logger.info(
+                f"calibrate: rejected degenerate pose "
+                f"(buffer-median {buffer_px:.1f}px vs best {self.best_reproj_px:.1f}px)"
+            )
         return result
 
     def set_calibration(self, calibration: CalibrationResult) -> None:

@@ -1,18 +1,37 @@
 # Public A9 Demo
 
 This folder is a small standalone demo for the accepted-paper public release.
-It uses the local wheel under `wheels/`, a tiny committed A9-style sample under
-`frames/a9_sample/`, and the released A9 model weights through `xcalib`.
+It installs `xcalib` editable from the repo source (so the env always tracks
+`src/xcalib`), a tiny committed A9-style sample under `frames/a9_sample/`, and the
+released A9 model weights through `xcalib`.
 
 The committed sample is for step-by-step usage walkthroughs. For realistic
 paper-scale runs, place `data/a9_test.h5` locally or let `xcalib.load_dataset()`
 resolve the released Hugging Face dataset cache. Optional frame extraction
 utilities live in the private `radar-lab-ops` workspace.
 
+## Quickstart notebook
+
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/radar-lab/XCalib/blob/main/demo/xcalib_quickstart.ipynb)
+
+`xcalib_quickstart.ipynb` is the most direct way to see the API: install →
+`Matcher.from_pretrained` (Hugging Face weights) → `load_dataset` (Hugging Face
+dataset, with an offline fallback to `frames/a9_sample`) → `match()` →
+`oneshot()` + `calibrate()`, with the overlays rendered inline.
+
+- **Colab:** click the badge above — it installs `xcalib` and shallow-clones this
+  repo for the sample.
+- **Locally:** `pixi install` here, then `pixi run notebook` to open it in
+  JupyterLab — or open `xcalib_quickstart.ipynb` in VS Code and pick this `pixi`
+  environment as the kernel (the env ships `jupyterlab`, `ipykernel`, and
+  `matplotlib`).
+
+The numbered scripts below are the same flow as plain, CI-friendly Python.
+
 ## Steps
 
-1. `run_00_prepare_assets.py`: check wheel, optional local weights, optional
-   local dataset cache, and ONNX outputs.
+1. `run_00_prepare_assets.py`: report the `xcalib` install, optional local
+   weights, optional local dataset cache, and ONNX outputs.
 2. `run_01_match_one_frame.py`: load one committed A9 sample frame and call
    `Matcher.match()`.
 3. `run_02_calibrate_stream.py`: stream A9 frames through `matcher.oneshot()`
@@ -28,11 +47,9 @@ From inside this `demo/` folder:
 pixi install
 ```
 
-`pixi.toml` installs the local wheel:
-
-```text
-wheels/xcalib-0.1.0-py3-none-any.whl
-```
+`pixi.toml` installs `xcalib` **editable** from the repo source (`../`), so the
+demo env always tracks `src/xcalib` — no wheel to rebuild. (Released installs use
+the published wheel / `pip install XCalib`; the notebook's Colab cell uses pip.)
 
 ## Run
 

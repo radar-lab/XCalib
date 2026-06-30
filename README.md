@@ -4,6 +4,7 @@
 [![Docs](https://github.com/radar-lab/XCalib/actions/workflows/docs.yml/badge.svg)](https://radar-lab.github.io/XCalib/)
 [![PyPI](https://img.shields.io/pypi/v/xcalib)](https://pypi.org/project/XCalib/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/radar-lab/XCalib/blob/main/demo/xcalib_quickstart.ipynb)
 
 Camera-LiDAR cross-modal matching for edge devices: pretrained matchers,
 targetless extrinsic calibration, ONNX/TensorRT export, HDF5 training, and
@@ -17,10 +18,11 @@ targetless calibration framework
 [CalibRefine](https://github.com/radar-lab/Lidar_Camera_Automatic_Calibration)
 (Cheng et al., IEEE TIM 2026, [arXiv:2502.17648](https://arxiv.org/abs/2502.17648)).
 
-> **Status** — public staging snapshot. This repository is being prepared under
-> `radar-lab/XCalib`, but it is **not** the final official release yet. Release
-> tags, PyPI publishing, and the official version will be cut only after final
-> confirmation.
+> **Status** — publicly released and actively developed. The public API
+> (`xcalib.__all__`) is stable across minor versions; internals may change
+> without notice. Broader visibility is expected once the accompanying IEEE
+> Sensors Letters paper is published. New versions are cut from `main` as tagged
+> releases.
 
 **Docs: [radar-lab.github.io/XCalib](https://radar-lab.github.io/XCalib/)**
 
@@ -59,6 +61,11 @@ pixi run smoke          # quick synthetic-frame smoke tests
 | `osx-arm64`             | PyPI (CPU build, used only for code review)       |
 
 ## Quickstart
+
+> Prefer a runnable, end-to-end walkthrough (install → Hub weights/data → match →
+> calibrate, with inline overlays)? Open
+> [`demo/xcalib_quickstart.ipynb`](demo/xcalib_quickstart.ipynb) locally or in
+> [Colab](https://colab.research.google.com/github/radar-lab/XCalib/blob/main/demo/xcalib_quickstart.ipynb).
 
 ```python
 import cv2, numpy as np

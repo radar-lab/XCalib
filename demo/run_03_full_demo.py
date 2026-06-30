@@ -6,10 +6,10 @@ from xcalib.visualization import draw_calibration_overlay, draw_matching_overlay
 
 from demo_common import (
     CalibrationState,
-    calibrate_when_ready,
     iter_demo_frames,
     load_demo_matcher,
     load_intrinsics,
+    print_calibration,
     print_calibration_failure,
     print_matches,
     save_overlay,
@@ -75,25 +75,41 @@ def main() -> int:
         state.buffered_pairs += report.n_confident_matches
         print(f"  calibration buffer pairs: {state.buffered_pairs}")
 
-        if calibrate_when_ready(
-            session,
-            state,
-            min_pairs=MIN_CALIBRATION_PAIRS,
-            not_ready_prefix=None,
-        ):
-            # Visualize the solved calibration: project the LiDAR onto the image.
+        # Continual refinement: calibrate() re-solves over the WHOLE buffer and,
+        # with its default degenerate-pose gate (since 0.2), adopts the latest
+        # non-clump pose as objects sweep the scene. A near-coplanar early solve
+        # that folds the cloud into a clump is rejected (result.accepted False);
+        # we only (re)draw the projection overlay when a pose is accepted.
+        cal = session.calibrate(min_pairs=MIN_CALIBRATION_PAIRS)
+        if cal.success and cal.accepted:
+            state.last_result = cal
             overlay = draw_calibration_overlay(
                 frame.image,
                 frame.point_cloud,
-                projection=state.last_result.projection,
+                projection=cal.projection,
                 bboxes_3d=frame.bboxes_3d,
             )
             out = save_overlay(overlay, VIZ_DIR / f"{frame.frame_key}_calibration.png")
-            print(f"  projection overlay -> {out.relative_to(VIZ_DIR.parent)}")
-            print(f"overlays saved under {VIZ_DIR}/")
-            return 0
+            print(
+                f"  calibration refined: {cal.n_inliers}/{cal.n_correspondences} inliers, "
+                f"buffer-median {cal.buffer_reproj_px:.1f}px -> {out.relative_to(VIZ_DIR.parent)}"
+            )
+        elif cal.success:
+            print(
+                f"  solve not accepted: inlier {cal.reproj_error_px:.2f}px, "
+                f"buffer-median {cal.buffer_reproj_px:.1f}px (degenerate planar pose)"
+            )
 
-    print_calibration_failure(state, MIN_CALIBRATION_PAIRS)
+    if state.last_result is None:
+        print_calibration_failure(state, MIN_CALIBRATION_PAIRS)
+    else:
+        print_calibration(state.last_result)
+        print(
+            f"\nfinal calibration: latest accepted pose, "
+            f"{state.last_result.n_correspondences} pairs, "
+            f"buffer-median {state.last_result.buffer_reproj_px:.1f}px "
+            f"(best seen {session.best_reproj_px:.1f}px)"
+        )
     print(f"overlays saved under {VIZ_DIR}/")
     return 0
 
