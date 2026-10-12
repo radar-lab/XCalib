@@ -15,18 +15,37 @@ The loop (see `session.OneShotSession`):
 Entry point: ``matcher.oneshot(intrinsics=CameraIntrinsics(...))``.
 """
 
-from .adapter import AdaptedModel, EmbeddingAdapter, weighted_infonce
-from .calibration import (
-    CalibrationResult,
-    CalibrationSession,
-    bbox2d_centers,
-    bbox3d_centers,
-    estimate_projection,
-    project_points,
-)
-from .memory import FeatureBank
-from .pseudo_labels import PseudoLabels, associate_projections, pseudo_labels_for_frame
-from .session import AdaptReport, ObserveReport, OneShotSession, SUPPORTED_MODELS
+# PEP 562 lazy exports. The `adapter`/`memory`/`session` submodules pull torch, so
+# eager-importing them here made `import xcalib.oneshot` — and, via
+# `gui.scene`'s `from ..oneshot.calibration import CalibrationResult`, the whole
+# `xcalib.continual` subpackage — load torch. Keeping this __init__ import-light lets
+# a process that must stay torch-free import the continual data layer + headless
+# scene IO. torch loads only when a one-shot adapt/session name is actually
+# accessed. `calibration` (cv2/numpy, no torch) is imported directly by callers via
+# `xcalib.oneshot.calibration`.
+_LAZY = {
+    "AdaptedModel": ".adapter", "EmbeddingAdapter": ".adapter",
+    "weighted_infonce": ".adapter",
+    "CalibrationResult": ".calibration", "CalibrationSession": ".calibration",
+    "bbox2d_centers": ".calibration", "bbox3d_centers": ".calibration",
+    "estimate_projection": ".calibration", "project_points": ".calibration",
+    "refine_projection": ".calibration",
+    "FeatureBank": ".memory",
+    "PseudoLabels": ".pseudo_labels", "associate_projections": ".pseudo_labels",
+    "pseudo_labels_for_frame": ".pseudo_labels",
+    "AdaptReport": ".session", "ObserveReport": ".session",
+    "OneShotSession": ".session", "SUPPORTED_MODELS": ".session",
+}
+
+
+def __getattr__(name: str):
+    module = _LAZY.get(name)
+    if module is None:
+        raise AttributeError(f"module 'xcalib.oneshot' has no attribute {name!r}")
+    import importlib
+
+    return getattr(importlib.import_module(module, __name__), name)
+
 
 __all__ = [
     "AdaptedModel",
@@ -37,6 +56,7 @@ __all__ = [
     "bbox2d_centers",
     "bbox3d_centers",
     "estimate_projection",
+    "refine_projection",
     "project_points",
     "FeatureBank",
     "PseudoLabels",

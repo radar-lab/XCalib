@@ -43,6 +43,7 @@ from loguru import logger
 from tqdm import tqdm
 
 from ..data import PrepareConfig, UTCFrameLoader, prepare_frame
+from ..data.hdf5_loader import BOX_SOURCES
 from ..models.registry import build_model
 from ..utils.config import EdgeConfig, load_yaml
 from ..utils.io import (
@@ -167,6 +168,7 @@ def evaluate_hdf5(
     top_k: int,
     pairwise_batch_size: int,
     limit_frames: Optional[int],
+    box_source: str = "stored",
 ) -> dict:
     model.eval()
     wrapper = make_wrapper(
@@ -178,7 +180,7 @@ def evaluate_hdf5(
         pairwise_batch_size=pairwise_batch_size,
     )
     acc = MatchingMetricsAccumulator()
-    with UTCFrameLoader(hdf5_path) as loader:
+    with UTCFrameLoader(hdf5_path, box_source=box_source) as loader:
         for i, raw in enumerate(loader):
             if limit_frames is not None and i >= limit_frames:
                 break
@@ -271,8 +273,8 @@ def _resolve_data(data: Union[str, Path], split: str) -> Path:
 
     Accepts a local ``.h5``/``.hdf5`` path (returned as-is) or a
     Hub-distributed site name like ``"a9_dataset_r02_s01"``, downloaded via
-    :func:`xcalib.hub.datasets.dataset_path`. The UTC partner caches are not
-    on the Hub — pass their local paths.
+    :func:`xcalib.hub.datasets.dataset_path`. The UTC caches are not on the
+    Hub — pass their local paths.
     """
     p = Path(data)
     if p.suffix.lower() in {".h5", ".hdf5"} or p.exists():
@@ -314,6 +316,7 @@ def train(
     limit_train_frames: Optional[int] = None,
     limit_val_frames: Optional[int] = None,
     pairwise_batch_size: int = 64,
+    box_source: Optional[str] = None,
 ) -> Path:
     """Train (from scratch) or fine-tune a matcher; returns the best checkpoint.
 
@@ -329,6 +332,13 @@ def train(
         site: Site used to pick the default config (inferred from
             *train_data* when it is a site name; falls back to ``utc4``).
         weights: Optional checkpoint to warm-start from (registry-name mode).
+        box_source: Which 3D boxes feed the point-cloud crops, for training and
+            validation alike: ``"stored"`` (the cache's ``lidar_bbox_3d``) or
+            ``"envelope"`` (the extents enclosing each oriented cuboid, for
+            caches whose stored boxes miss turned vehicles; see
+            ``docs/hdf5-format.md``). Defaults to the config's ``box_source``
+            key, then ``"stored"``. Weights trained with one source were not
+            trained for the other.
         output_dir: Where per-epoch checkpoints, ``best.pth`` (selected by
             validation MRR), and ``history.json`` land.
 
@@ -361,6 +371,13 @@ def train(
     else:
         cfg = load_yaml(config)
 
+    # Checked first: a bad value should not cost a model build or a Hub download.
+    resolved_box_source = box_source if box_source is not None else cfg.get("box_source", "stored")
+    if resolved_box_source not in BOX_SOURCES:
+        raise ValueError(
+            f"box_source must be one of {', '.join(BOX_SOURCES)} (got {resolved_box_source!r})"
+        )
+
     dev = resolve_device(device if device is not None else cfg.get("device", "auto"))
 
     random.seed(seed)
@@ -386,6 +403,10 @@ def train(
 
     train_h5 = _resolve_data(train_data, "train")
     val_h5 = _resolve_data(val_data, "val")
+    if resolved_box_source == "envelope":
+        # The validation cache is opened only after the first training epoch; make it fail now
+        # if it cannot give the enclosing boxes (opening the loader checks and closes the file).
+        UTCFrameLoader(val_h5, box_source=resolved_box_source)
 
     prepare_cfg = PrepareConfig(
         crop_size=int(cfg.get("crop_size", 32)),
@@ -419,9 +440,10 @@ def train(
         "seed": seed,
         "train_data": str(train_h5),
         "val_data": str(val_h5),
+        "box_source": resolved_box_source,
     }
 
-    with UTCFrameLoader(train_h5) as train_loader:
+    with UTCFrameLoader(train_h5, box_source=resolved_box_source) as train_loader:
         keys = list(train_loader.frame_keys)
         if limit_train_frames is not None:
             keys = keys[:limit_train_frames]
@@ -461,6 +483,7 @@ def train(
                 top_k=top_k,
                 pairwise_batch_size=pairwise_batch_size,
                 limit_frames=limit_val_frames,
+                box_source=resolved_box_source,
             )
             row = {
                 "epoch": epoch,

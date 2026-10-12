@@ -233,6 +233,125 @@ def estimate_projection(
     )
 
 
+def refine_projection(
+    previous: CalibrationResult,
+    points_3d: np.ndarray,
+    points_2d: np.ndarray,
+    *,
+    ransac_reproj_px: float = 8.0,
+    min_points: int = 6,
+) -> CalibrationResult:
+    """NUDGE an existing calibration instead of re-solving from scratch.
+
+    A deployed site usually has a good matrix already — surveyed, or solved
+    when the sensors were mounted. After weather / vibration shifts the rig a
+    little, a fresh :func:`estimate_projection` from whatever pairs happen to
+    be buffered is NOT guaranteed to beat it (planar scenes are bistable, a
+    bad pair pulls a fresh solve anywhere). This seeds Levenberg-Marquardt at
+    the *previous* pose, refines on the pairs the previous pose already
+    explains, and adopts the result ONLY when it lowers the median
+    reprojection error over ALL supplied pairs — the worst case is "keep what
+    you had".
+
+    Returns a CalibrationResult whose ``accepted`` says whether the refined
+    pose beat ``previous`` (when False, the returned pose IS the previous one
+    and the caller should keep it). ``buffer_reproj_px`` carries the median
+    error of the returned pose over the supplied pairs. Use
+    :func:`estimate_projection` instead when there is no trustworthy prior —
+    e.g. a first-time setup solved purely from hand-labelled pairs.
+    """
+    if not previous.success or previous.rotation is None or previous.translation is None:
+        raise ValueError("refine_projection needs a SUCCESSFUL previous calibration")
+    pts3 = np.ascontiguousarray(np.asarray(points_3d, dtype=np.float64).reshape(-1, 3))
+    pts2 = np.ascontiguousarray(np.asarray(points_2d, dtype=np.float64).reshape(-1, 2))
+    n = pts3.shape[0]
+    if pts2.shape[0] != n:
+        raise ValueError(f"points_3d ({n}) and points_2d ({pts2.shape[0]}) disagree")
+
+    intr = previous.intrinsics
+    K, dist = intr.K, intr.dist_coeffs
+
+    def median_err(R: np.ndarray, t: np.ndarray) -> float:
+        uv, depth = project_points(pts3, intr, R, t)
+        err = np.linalg.norm(uv - pts2, axis=1)
+        err[depth <= 0] = np.inf
+        return float(np.median(err))
+
+    prev_med = median_err(previous.rotation, previous.translation)
+    if n < min_points:
+        out = CalibrationResult(
+            success=True, intrinsics=intr,
+            rotation=previous.rotation, translation=previous.translation,
+            projection=previous.projection,
+            n_correspondences=n, n_inliers=previous.n_inliers,
+            reproj_error_px=previous.reproj_error_px,
+            message=f"only {n} pair(s) (< {min_points}) — kept the previous calibration",
+        )
+        out.buffer_reproj_px = prev_med
+        out.accepted = False
+        return out
+
+    # LM-refine on the pairs the PREVIOUS pose already explains (its inliers);
+    # refining on outliers would drag the pose toward mismatched pairs.
+    uv_prev, depth_prev = project_points(pts3, intr, previous.rotation, previous.translation)
+    err_prev = np.linalg.norm(uv_prev - pts2, axis=1)
+    err_prev[depth_prev <= 0] = np.inf
+    inl = err_prev < float(ransac_reproj_px) * 3.0  # generous: drift is the point
+    if int(inl.sum()) < min_points:
+        out = CalibrationResult(
+            success=True, intrinsics=intr,
+            rotation=previous.rotation, translation=previous.translation,
+            projection=previous.projection,
+            n_correspondences=n, n_inliers=int(inl.sum()),
+            reproj_error_px=previous.reproj_error_px,
+            message=f"the previous pose explains only {int(inl.sum())} of {n} pair(s) — "
+                    "too far gone to nudge; re-solve (estimate_projection) instead",
+        )
+        out.buffer_reproj_px = prev_med
+        out.accepted = False
+        return out
+
+    rvec0, _ = cv2.Rodrigues(np.ascontiguousarray(previous.rotation))
+    tvec0 = np.ascontiguousarray(previous.translation.reshape(3, 1)).astype(np.float64)
+    try:
+        rvec, tvec = cv2.solvePnPRefineLM(
+            np.ascontiguousarray(pts3[inl]), np.ascontiguousarray(pts2[inl]),
+            K, dist, rvec0.copy(), tvec0.copy(),
+        )
+    except cv2.error:
+        rvec, tvec = rvec0, tvec0
+
+    R, _ = cv2.Rodrigues(rvec)
+    t = tvec.reshape(3)
+    new_med = median_err(R, t)
+    improved = new_med < prev_med
+
+    if not improved:
+        R, t = previous.rotation, previous.translation
+        new_med = prev_med
+
+    uv, depth = project_points(pts3, intr, R, t)
+    err = np.linalg.norm(uv - pts2, axis=1)
+    err[depth <= 0] = np.inf
+    m = err < float(ransac_reproj_px)
+    out = CalibrationResult(
+        success=True,
+        intrinsics=intr,
+        rotation=R,
+        translation=t,
+        projection=K @ np.hstack([R, t.reshape(3, 1)]),
+        n_correspondences=n,
+        n_inliers=int(m.sum()),
+        reproj_error_px=float(np.sqrt((err[m] ** 2).mean())) if m.any() else float("inf"),
+        message=(f"refined: median {prev_med:.1f} -> {new_med:.1f} px over {n} pair(s)"
+                 if improved else
+                 f"no improvement over the previous calibration (median {prev_med:.1f} px) — kept it"),
+    )
+    out.buffer_reproj_px = new_med
+    out.accepted = bool(improved)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Multi-frame accumulation
 # ---------------------------------------------------------------------------
@@ -353,6 +472,23 @@ class CalibrationSession:
         else:
             logger.warning(f"Calibration failed: {result.message}")
         return result
+
+    def refine(self, previous: CalibrationResult, *, min_pairs: int = 6) -> CalibrationResult:
+        """Nudge an EXISTING calibration with everything buffered so far.
+
+        The counterpart of :meth:`solve` for sites that already have a good
+        matrix: LM seeded at ``previous``, adopted only when the median
+        reprojection error over the whole buffer improves (``.accepted``
+        reports the verdict; on False the returned pose IS the previous one).
+        See :func:`refine_projection`.
+        """
+        return refine_projection(
+            previous,
+            np.array(self._pts3d).reshape(-1, 3),
+            np.array(self._pts2d).reshape(-1, 2),
+            ransac_reproj_px=self.ransac_reproj_px,
+            min_points=min_pairs,
+        )
 
     def reprojection_error(
         self,

@@ -9,7 +9,7 @@ pip install XCalib
 ```
 
 Requires Python 3.10+. For ONNX export add `XCalib[onnx]`; for HDF5 training add
-`XCalib[train]`.
+`XCalib[train]`; for the `xcalib-review` window add `XCalib[gui]`.
 
 ## 2. Load a pretrained matcher
 
@@ -40,8 +40,34 @@ print(result.matches)           # [(img_idx, lidar_idx, score), ...]
 
 That's it — `result.matches` gives the camera box ↔ LiDAR box pairs.
 
+## Optional: one pair per box
+
+`result.matches` holds the best-scoring LiDAR box for each camera box, so two camera boxes can
+end up with the same LiDAR box. Ask for the optimal one-to-one assignment instead:
+
+```python
+result = matcher.match(
+    image=image,
+    point_cloud=points,
+    bboxes_2d=bboxes_2d,
+    bboxes_3d=bboxes_3d,
+    one_to_one=True,
+)
+
+print(result.assignment)  # [(img_idx, lidar_idx, score), ...], each box used at most once
+```
+
+Once you have a successful calibration (for example from `matcher.calibrate(..., intrinsics=K)`),
+pass it as `calibration=calib` as well. Pairs whose 3D center projects behind the camera or far
+from the 2D box are then ruled out before the assignment, unless that would leave a camera box
+with no candidate at all. See [Pair selection](pair-selection.md).
+
 ## Next steps
 
 - [Input protocol](protocol.md) — exact shape/dtype contract for real frames.
+- [Pair selection](pair-selection.md) — one-to-one assignment and the geometric gate.
+- [Deployed site](deployed-site.md) — capture frames the matcher is lost on, refine an existing calibration.
+- [Review GUI](review-gui.md) — fix wrong pairs in `xcalib-review`.
+- [Continual refine](continual-refine.md) — learn from verified pairs behind a validation gate.
 - [Models and datasets](hub.md) — available checkpoints and sites.
 - [Custom models](adding-models.md) — load your own weights or add an architecture.

@@ -55,12 +55,20 @@ nav:
   - Quick start: quick-start.md
   - Guides:
       - Input protocol: protocol.md
+      - Pair selection: pair-selection.md
+      - Deployed site: deployed-site.md
+      - Review GUI: review-gui.md
+      - Continual refine: continual-refine.md
       - Visualization: visualization.md
       - Models and datasets: hub.md
       - HDF5 cache format: hdf5-format.md
       - Custom models: adding-models.md
   - Reference:
       - API reference: api.md
+  - Contributing:
+      - Workflow: agents/workflow.md
+      - Code index: agents/code-index.md
+      - Conventions: agents/conventions.md
   - Paper:
       - Reproducing the paper: paper.md
       - Frozen artefacts: evidence/index.md

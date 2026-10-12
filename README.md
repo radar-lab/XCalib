@@ -6,9 +6,18 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/radar-lab/XCalib/blob/main/demo/xcalib_quickstart.ipynb)
 
-Camera-LiDAR cross-modal matching for edge devices: pretrained matchers,
-targetless extrinsic calibration, ONNX/TensorRT export, HDF5 training, and
-label-free one-shot adaptation — behind one small API.
+Camera-LiDAR cross-modal matching for edge devices, behind one small API:
+
+- **Match** every camera box against every LiDAR box with a pretrained matcher, then pick
+  the pairs: optional one-to-one assignment, gated by projection geometry once you pass a
+  calibration ([pair selection](docs/pair-selection.md)).
+- **Calibrate** without targets (PnP/RANSAC), or nudge a site's existing matrix and keep
+  the change only if the reprojection error improves ([deployed site](docs/deployed-site.md)).
+- **Adapt** on site without labels (one-shot), or keep learning from human-verified pairs
+  with a gated continual refine ([continual refine](docs/continual-refine.md)).
+- **Capture and review** the frames the matcher is lost on, and fix the wrong pairs in a
+  Qt window ([review GUI](docs/review-gui.md)).
+- **Deploy** with ONNX/TensorRT export and **train** on HDF5 caches.
 
 `xcalib` is the deployment package for the matching front-end studied in
 *Position Encoding in Detection-Based LiDAR–Camera Matching: A Diagnostic
@@ -32,6 +41,7 @@ targetless calibration framework
 pip install XCalib            # inference
 pip install "XCalib[onnx]"    # + ONNX export / onnxruntime parity checks
 pip install "XCalib[train]"   # + h5py (HDF5 training / fine-tuning)
+pip install "XCalib[gui]"     # + PySide6 (the xcalib-review window)
 ```
 
 For normal use, install the wheel from PyPI once it is published; downloading
@@ -66,6 +76,8 @@ pixi run smoke          # quick synthetic-frame smoke tests
 > calibrate, with inline overlays)? Open
 > [`demo/xcalib_quickstart.ipynb`](demo/xcalib_quickstart.ipynb) locally or in
 > [Colab](https://colab.research.google.com/github/radar-lab/XCalib/blob/main/demo/xcalib_quickstart.ipynb).
+> The continual-refine flow has its own notebook,
+> [`demo/refine_unification.ipynb`](demo/refine_unification.ipynb).
 
 ```python
 import cv2, numpy as np
@@ -93,7 +105,11 @@ matcher.build("onnx", output_dir="onnx/crlite")    # export + torch parity check
 matcher.build("trt", precision="fp16")             # Jetson: trtexec + shape profiles
 
 K = xcalib.CameraIntrinsics(fx=1418., fy=1422., cx=976., cy=606.)
-matcher.calibrate(frames, intrinsics=K)            # targetless PnP/RANSAC extrinsics
+calib = matcher.calibrate(image, pc, b2, b3, intrinsics=K)   # targetless PnP/RANSAC extrinsics
+
+result = matcher.match(image, pc, b2, b3,          # result.assignment: optimal one-to-one pairs,
+                       one_to_one=True,            #   gated by the calibration's projection
+                       calibration=calib)
 
 session = matcher.oneshot(K)                       # label-free adaptation:
 session.observe(image, pc, b2, b3)                 #   confident matches -> projection
@@ -103,6 +119,19 @@ session.save("runs/site_adapted")
 matcher.train("train.h5", "val.h5", epochs=10)     # fine-tune loaded weights
 matcher.save_pretrained("runs/my_model")           # weights + config
 ```
+
+A deployed site can nudge a matrix it already trusts, and save the frames the matcher gets
+lost on so a person can fix the pairs in [`xcalib-review`](docs/review-gui.md):
+
+```python
+rec = xcalib.SceneRecorder("capture/site1", camera="cam_front")
+session = matcher.oneshot(K, recorder=rec)   # saves frames with detections but no confident pair
+session.set_calibration(calib)               # start from the matrix the site already trusts
+session.observe(image, pc, b2, b3)           # ... once per frame
+session.calibrate(refine=True)               # nudge it; kept only if the median error drops
+```
+
+The whole flow is in [deployed site](docs/deployed-site.md).
 
 Training and dataset helpers:
 
@@ -114,6 +143,9 @@ best = train("crlite", "a9_dataset_r02_s01", "a9_dataset_r02_s01",
              optimizer="adam", scheduler="cosine")          # paper recipe
 loader = load_dataset("a9_dataset_r02_s01", split="test")   # Hub or local cache
 ```
+
+To keep improving a site's matcher from human-verified pairs instead of HDF5 caches, see
+[Continual refine](docs/continual-refine.md).
 
 External configs work the same way as packaged configs, so users can keep a
 custom YAML next to custom weights:
@@ -192,6 +224,14 @@ released Hub artifacts when available. The A9 caches derive from the TUM
 Traffic (A9) dataset (CC BY-NC-ND 4.0); users remain responsible for following
 upstream dataset terms.
 
+The A9 caches also carry each LiDAR box as an oriented cuboid. By default the loader hands
+out the boxes exactly as the cache stores them, which is what every released weight and
+reported number uses. `box_source="envelope"` (accepted by `load_dataset`, `train` and
+`Matcher.train`) hands out the extents that enclose each cuboid instead, so the axis-aligned
+point-cloud crop keeps vehicles that are turned against the axes whole. Weights are tied to
+the source they were trained with; see
+[3D boxes: stored and envelope](docs/hdf5-format.md#3d-boxes-stored-and-envelope).
+
 ## CLI
 
 ```bash
@@ -201,6 +241,7 @@ xcalib build-trt    --model crlite --site a9_dataset_r02_s01 --precision fp16
 xcalib pull-weights --model crlite --site a9_dataset_r02_s01
 xcalib pull-dataset --site a9_dataset_r02_s01 --split test
 xcalib version
+xcalib-review --scene capture/site1 --camera cam_front   # review window; needs XCalib[gui]
 ```
 
 ## Reproducing the paper
@@ -227,20 +268,29 @@ Frozen evaluation summaries cited by the supplemental:
 ./
 ├── pyproject.toml            packaging + pixi env + ruff (single config file)
 ├── mkdocs.yml                docs site (GitHub Pages)
+├── AGENTS.md                 entry point for contributors and coding agents
 ├── src/xcalib/               the package (ships in the wheel)
 │   ├── engine/               matcher, wrappers, exporter, trt, trainer
 │   ├── models/               architectures + registry
-│   ├── oneshot/              PnP/RANSAC calibration, pseudo-labels, adapters
+│   ├── oneshot/              PnP/RANSAC calibration + refinement, pseudo-labels, adapters
+│   ├── continual/            corrections corpus, gated continual refine, revisions
+│   ├── gui/                  `xcalib-review` Qt window + scene IO
 │   ├── hub/                  Hub download helpers for weights + datasets
 │   ├── data/                 cropping helpers + HDF5 loader (lazy h5py)
 │   ├── utils/                config, io, metrics, torch_check
 │   ├── cfg/                  packaged per-(model, site) YAML configs
+│   ├── assign.py             one-to-one assignment + geometric gate
+│   ├── capture.py            SceneRecorder: save frames for review
+│   ├── calibration_refine.py physical-pose refinement candidate + validation gate
+│   ├── visualization.py      matching + calibration overlays
 │   ├── protocol.py           input contract (validate_frame_inputs, intrinsics)
 │   └── cli.py                `xcalib` console entry point
 ├── scripts/                  public demos, smoke helpers, and docs guards
 │   └── paper/                paper validation, export, TRT, and benchmark scripts
+├── demo/                     quickstart + continual-refine notebooks, numbered scripts
 ├── tests/                    grouped pytest suite (smoke/unit/integration)
 ├── docs/                     docs site sources (see mkdocs.yml nav)
+│   ├── agents/               contributor workflow, code index, conventions
 │   └── evidence/             frozen JSON evidence linked from the paper docs
 ├── checkpoints/              optional local .pth files (gitignored)
 └── datasets/                 optional local HDF5 caches (gitignored)
@@ -249,9 +299,9 @@ Frozen evaluation summaries cited by the supplemental:
 ## API stability
 
 Only the symbols exported by `xcalib.__all__` (`Matcher`, `train`,
-`load_dataset`, result dataclasses, protocol types) are stable across minor
-versions. Anything imported from submodules is internal and may change
-without notice.
+`load_dataset`, result dataclasses, pair-selection and deployed-site helpers,
+protocol types) are stable across minor versions. Anything imported from
+submodules is internal and may change without notice.
 
 ## License and citation
 

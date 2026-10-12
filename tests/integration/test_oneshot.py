@@ -440,3 +440,60 @@ def test_matcher_single_frame_calibrate_handles_no_matches(vit_exp1_matcher):
     )
     assert not result.success
     assert result.n_correspondences == 0
+
+
+# ============================================================================
+# Deployed-site workflow: lost-frame capture + matrix refinement
+# ============================================================================
+
+
+def test_observe_records_lost_frames(vit_exp1_matcher, tmp_path):
+    """Frames the matcher is LOST on are captured as a SUSTechPOINTS scene
+    for offline human review — the escape hatch past the pseudo-label gate."""
+    from xcalib import SceneRecorder
+    from xcalib.gui.scene import Scene
+
+    rec = SceneRecorder(tmp_path / "cap", camera="cam")
+    # an impossible threshold makes every frame "lost" — deterministic trigger
+    session = vit_exp1_matcher.oneshot(K_GT, match_threshold=2.0, recorder=rec)
+    image, pc, b2, b3, _ = synth_frame(seed=500, n=5)
+    rep = session.observe(image, pc, b2, b3)
+    assert rep.n_confident_matches == 0
+    assert rec.frames() == ["000000"]
+    scene = Scene(str(tmp_path / "cap"), "cam")
+    assert len(scene.load_rects("000000")) == b2.shape[0]
+    assert len(scene.load_boxes("000000")) == b3.shape[0]
+
+    # trigger off -> the same lost frame is NOT captured
+    rec2 = SceneRecorder(tmp_path / "cap2", camera="cam")
+    session2 = vit_exp1_matcher.oneshot(K_GT, match_threshold=2.0, recorder=rec2,
+                                        record_lost_frames=False)
+    session2.observe(image, pc, b2, b3)
+    assert rec2.frames() == []
+
+
+def test_session_calibrate_refine_nudges_existing(vit_exp1_matcher):
+    """calibrate(refine=True) nudges the CURRENT matrix from buffered pairs and
+    adopts only on improvement — the deployed-site alternative to a fresh solve."""
+    import cv2 as _cv2
+
+    session = vit_exp1_matcher.oneshot(K_GT)
+    with pytest.raises(ValueError, match="existing calibration"):
+        session.calibrate(refine=True)
+
+    rng = np.random.default_rng(7)
+    pts3 = _sample_visible_centers(rng, 30)
+    uv, _ = project_points(pts3, K_GT, R_GT, T_GT)
+    session.calib_session.add_correspondences(uv, pts3)
+
+    drift, _ = _cv2.Rodrigues(np.deg2rad(1.0) * np.array([0.3, -0.5, 0.8]))
+    R0, t0 = drift @ R_GT, T_GT + np.array([0.15, -0.10, 0.05])
+    session.set_calibration(CalibrationResult(
+        success=True, intrinsics=K_GT, rotation=R0, translation=t0,
+        projection=K_GT.K @ np.hstack([R0, t0.reshape(3, 1)])))
+
+    out = session.calibrate(refine=True)
+    assert out.accepted
+    assert session.calibration is out
+    rot_err, trans_err = out.pose_error(np.hstack([R_GT, T_GT.reshape(3, 1)]))
+    assert rot_err < 0.2 and trans_err < 0.05

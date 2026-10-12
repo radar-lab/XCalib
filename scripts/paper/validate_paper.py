@@ -54,6 +54,7 @@ from xcalib.data import (  # noqa: E402
     UTCFrameLoader,
     prepare_frame,
 )
+from xcalib.data.hdf5_loader import BOX_SOURCES  # noqa: E402
 from xcalib.utils.config import load_yaml  # noqa: E402
 from xcalib.utils.io import default_config_path  # noqa: E402
 from xcalib.utils.metrics import (  # noqa: E402
@@ -117,6 +118,7 @@ def evaluate_one_model(
     hdf5_path: Path,
     device: str,
     limit_frames: int | None = None,
+    box_source: str = "stored",
 ) -> dict:
     cfg_path = _config_path(model, site)
     if not cfg_path.exists():
@@ -143,7 +145,7 @@ def evaluate_one_model(
     prepare_cfg = matcher.prepare_cfg
     acc = MatchingMetricsAccumulator()
 
-    with UTCFrameLoader(hdf5_path) as loader:
+    with UTCFrameLoader(hdf5_path, box_source=box_source) as loader:
         for i, raw in enumerate(tqdm(loader, desc=f"{model}/{site}", leave=False)):
             if limit_frames is not None and i >= limit_frames:
                 break
@@ -190,6 +192,12 @@ def main() -> None:
                         help="Optional cap on frames for quick smoke runs")
     parser.add_argument("--output", type=Path, default=None,
                         help="Optional JSON report path")
+    parser.add_argument(
+        "--box-source", choices=BOX_SOURCES, default="stored",
+        help="3D boxes that feed the crops: 'stored' (default; what the shipped weights and the "
+             "reported numbers use) or 'envelope' (extents enclosing each oriented cuboid; "
+             "see docs/hdf5-format.md)",
+    )
     args = parser.parse_args()
 
     h5 = _resolve_h5(args.site, args.hdf5)
@@ -207,7 +215,8 @@ def main() -> None:
         t0 = time.perf_counter()
         try:
             summary = evaluate_one_model(
-                model, args.site, h5, args.device, limit_frames=args.limit_frames
+                model, args.site, h5, args.device, limit_frames=args.limit_frames,
+                box_source=args.box_source,
             )
         except FileNotFoundError as e:
             logger.error(str(e))
@@ -233,17 +242,17 @@ def main() -> None:
 
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
+        report = {
+            "site": args.site,
+            "hdf5": _report_hdf5_path(args.site, h5),
+            "device": args.device,
+            "results": {name: summary for name, summary in rows},
+        }
+        if args.box_source != "stored":
+            # Only a non-default choice is recorded, so default reports keep their frozen shape.
+            report["box_source"] = args.box_source
         with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "site": args.site,
-                    "hdf5": _report_hdf5_path(args.site, h5),
-                    "device": args.device,
-                    "results": {name: summary for name, summary in rows},
-                },
-                f,
-                indent=2,
-            )
+            json.dump(report, f, indent=2)
         logger.info(f"Wrote report to {args.output}")
 
 

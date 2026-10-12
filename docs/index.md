@@ -1,8 +1,17 @@
 # XCalib
 
-Camera-LiDAR cross-modal matching for edge devices: pretrained matchers, targetless extrinsic
-calibration, ONNX/TensorRT export, HDF5 training, and label-free one-shot adaptation — behind one
-small API.
+Camera-LiDAR cross-modal matching for edge devices, behind one small API:
+
+- **Match** every camera box against every LiDAR box with a pretrained matcher, then pick
+  the pairs: optional one-to-one assignment, gated by projection geometry once you pass a
+  calibration ([pair selection](pair-selection.md)).
+- **Calibrate** without targets (PnP/RANSAC), or nudge a site's existing matrix and keep
+  the change only if the reprojection error improves ([deployed site](deployed-site.md)).
+- **Adapt** on site without labels (one-shot), or keep learning from human-verified pairs
+  with a gated continual refine ([continual refine](continual-refine.md)).
+- **Capture and review** the frames the matcher is lost on, and fix the wrong pairs in a
+  Qt window ([review GUI](review-gui.md)).
+- **Deploy** with ONNX/TensorRT export and **train** on HDF5 caches.
 
 `xcalib` is the deployment package for the matching front-end studied in _Position Encoding in
 Detection-Based LiDAR–Camera Matching: A Diagnostic Study at Infrastructure Sites_ (accepted at
@@ -23,6 +32,7 @@ TIM 2026, [arXiv:2502.17648](https://arxiv.org/abs/2502.17648)).
 pip install XCalib            # inference
 pip install "XCalib[onnx]"    # + ONNX export / onnxruntime parity checks
 pip install "XCalib[train]"   # + h5py for HDF5 training
+pip install "XCalib[gui]"     # + PySide6 for the xcalib-review window
 ```
 
 For normal use, install the PyPI wheel once it is published; a source checkout
@@ -70,15 +80,23 @@ shape/dtype contract.
 
 Everything a deployment needs hangs off the `Matcher`:
 
-| call                                       | does                                                 |
-| ------------------------------------------ | ---------------------------------------------------- |
-| `Matcher.from_pretrained(model, site=...)` | load packaged config + released/local weights        |
-| `.match(...)` / `.pair(...)`               | K x M similarity, top-k matches, latency             |
-| `.calibrate(frames, intrinsics=K)`         | targetless PnP/RANSAC extrinsics                     |
-| `.oneshot(K)`                              | one-shot adaptation session (pseudo-labels, adapter) |
-| `.train(train_h5, val_h5)`                 | fine-tune the loaded weights on HDF5 caches          |
-| `.build("onnx" \| "trt")`                  | export whatever weights are loaded                   |
-| `.save_pretrained(dir)`                    | persist weights + config locally                     |
+| call                                              | does                                                                 |
+| ------------------------------------------------- | -------------------------------------------------------------------- |
+| `Matcher.from_pretrained(model, site=...)`        | load packaged config + released/local weights                        |
+| `.match(...)` / `.pair(...)`                      | K x M similarity, top-k matches, latency                             |
+| `.match(..., one_to_one=True, calibration=calib)` | optimal one-to-one `result.assignment`, gated by projection geometry |
+| `.calibrate(image, pc, b2, b3, intrinsics=K)`     | targetless PnP/RANSAC extrinsics from one frame                      |
+| `.oneshot(K)`                                     | one-shot adaptation session (pseudo-labels, adapter)                 |
+| `.oneshot(K, recorder=rec)`                       | the same, and saves frames with detections but no confident pair     |
+| `.train(train_h5, val_h5)`                        | fine-tune the loaded weights on HDF5 caches                          |
+| `.build("onnx" \| "trt")`                         | export whatever weights are loaded                                   |
+| `.save_pretrained(dir)`                           | persist weights + config locally                                     |
+
+A site that already has a calibration can nudge it instead of re-solving:
+`session.calibrate(refine=True)` refines it with the buffered pairs and keeps the change only if
+the median reprojection error drops. `SceneRecorder` saves the frames the matcher gets lost on,
+so a person can fix the pairs in [`xcalib-review`](review-gui.md). The full flow is in
+[Deployed site](deployed-site.md).
 
 Training and dataset helpers:
 
@@ -89,6 +107,13 @@ best = train("crlite", "a9_dataset_r02_s01", "a9_dataset_r02_s01",
              site="a9_dataset_r02_s01", epochs=100)
 loader = load_dataset("a9_dataset_r02_s01", split="test")
 ```
+
+`load_dataset`, `train` and `Matcher.train` also take `box_source="envelope"`: the point-cloud
+crop then uses the extents that enclose each oriented LiDAR cuboid instead of the boxes as the
+cache stores them (the default, and what every released weight uses). See
+[3D boxes: stored and envelope](hdf5-format.md#3d-boxes-stored-and-envelope). To keep improving a
+site's matcher from human-verified pairs instead of HDF5 caches, see
+[Continual refine](continual-refine.md).
 
 ### External Configs
 
@@ -177,10 +202,14 @@ or from local files; see [Models and datasets](hub.md).
 ## Where next
 
 - [Input protocol](protocol.md) — the exact contract `match()` enforces.
+- [Pair selection](pair-selection.md) — one-to-one assignment and the geometric gate.
+- [Deployed site](deployed-site.md) — capture frames the matcher is lost on, refine an existing calibration.
+- [Review GUI](review-gui.md) — fix wrong pairs in `xcalib-review`.
+- [Continual refine](continual-refine.md) — accumulate verified pairs and refine behind a gate.
 - [Visualization](visualization.md) — draw matching links and calibrated LiDAR projections.
 - [Models and datasets](hub.md) — load released weights and A9 dataset caches.
 - [Custom checkpoints and models](adding-models.md) — load external weights/configs, or add a new packaged architecture.
-- [HDF5 cache format](hdf5-format.md) — what `train()` / `load_dataset()` read.
+- [HDF5 cache format](hdf5-format.md) — what `train()` / `load_dataset()` read, including the `box_source` choice.
 - [API reference](api.md) — the curated public API.
 - [Reproducing the paper](paper.md) — validation commands and reference numbers.
 - [Paper evidence](evidence/index.md) — frozen JSON evidence and public/private data scope.

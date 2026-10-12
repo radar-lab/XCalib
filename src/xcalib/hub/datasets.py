@@ -150,15 +150,25 @@ def load_dataset(
     revision: Optional[str] = None,
     token: Optional[str] = None,
     local: Optional[str | Path] = None,
+    box_source: str = "stored",
 ) -> "UTCFrameLoader":
     """Return an HDF5 frame loader for one split of a site's cache.
 
     Resolution order: explicit ``local`` path → checkout-local default →
     Hub download (cached by huggingface_hub). Requires ``h5py`` (the
     ``[train]`` extra).
+
+    ``box_source`` picks the 3D boxes the loader hands out: ``"stored"`` (the
+    cache's ``lidar_bbox_3d``, the default) or ``"envelope"`` (the extents
+    enclosing each oriented cuboid; see ``docs/hdf5-format.md``).
     """
     from ..data import UTCFrameLoader  # lazy: h5py is an optional extra
+    from ..data.hdf5_loader import BOX_SOURCES
 
+    if box_source not in BOX_SOURCES:  # before any download
+        raise ValueError(
+            f"box_source must be one of {', '.join(BOX_SOURCES)} (got {box_source!r})"
+        )
     if local is not None:
         path = Path(local)
         if not path.exists():
@@ -167,5 +177,5 @@ def load_dataset(
         path = dataset_path(
             site, split, repo_id=repo_id, revision=revision, token=token
         )
-    return UTCFrameLoader(path)
+    return UTCFrameLoader(path, box_source=box_source)
 

@@ -62,7 +62,32 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 @dataclass
 class MatchResult:
-    """Container for matcher.match() output."""
+    """Container for matcher.match() output.
+
+    Attributes:
+        similarity: ``[K, M]`` float32 scores in [-1, 1] or [0, 1] (model-dependent),
+            one row per camera box and one column per LiDAR box that survived
+            cropping (see ``kept_2d_indices`` / ``kept_3d_indices``).
+        top_indices: ``[K]`` int64, the highest-scoring column of each row.
+        matches: ``(img_idx, lidar_idx, score)`` triples with
+            ``score >= match_threshold``, up to ``top_k`` per camera box, numbered
+            as in the boxes passed to ``match()``.
+        kept_2d_indices: Original indices of the camera boxes that survived
+            cropping; row ``i`` of ``similarity`` is camera box ``kept_2d_indices[i]``.
+        kept_3d_indices: The same for the LiDAR boxes and the columns of ``similarity``.
+        latency_ms: Forward-pass time when ``return_latency=True``, otherwise the
+            time of the whole call (cropping, scoring, assignment).
+        model: Name of the model that produced the scores.
+        device: Device the model ran on.
+        assignment: With ``one_to_one=True``, the optimal one-to-one
+            ``(img_idx, lidar_idx, similarity)`` pairs in the original box
+            numbering, geometry-gated when ``calibration`` was given; ``[]`` otherwise.
+        geo_compatible: With ``calibration``, a ``[K, M]`` bool matrix of
+            geometrically compatible pairs, indexed like ``similarity``; else ``None``.
+        proj_px: With ``calibration``, a ``[K, M]`` matrix of pixel distances from
+            each projected 3D center to each 2D box center (``inf`` behind the
+            camera), indexed like ``similarity``; else ``None``.
+    """
     similarity: np.ndarray           # [K, M] float32 in [-1, 1] or [0, 1] (model-dependent)
     top_indices: np.ndarray          # [K] int64 — argmax LiDAR per image bbox
     matches: List[Tuple[int, int, float]] = field(default_factory=list)
@@ -71,6 +96,15 @@ class MatchResult:
     latency_ms: float = 0.0
     model: str = ""
     device: str = ""
+    # match(one_to_one=True): optimal one-to-one (img, lid, raw score) pairs in
+    # the caller's ORIGINAL bbox numbering — geometry-gated when a calibration
+    # was supplied. Empty list when one_to_one was off.
+    assignment: List[Tuple[int, int, float]] = field(default_factory=list)
+    # match(calibration=...): per-pair geometric compatibility + projected
+    # center distance (px), in KEPT-index space (rows/cols of `similarity`).
+    # None when no calibration was supplied.
+    geo_compatible: Optional[np.ndarray] = None
+    proj_px: Optional[np.ndarray] = None
 
 
 class Matcher:
@@ -205,6 +239,11 @@ class Matcher:
         match_threshold: float = 0.0,
         return_latency: bool = False,
         validate: str = "warn",
+        *,
+        one_to_one: bool = False,
+        calibration: Optional["CalibrationResult"] = None,
+        geo_gate_min_px: Optional[float] = None,
+        geo_gate_diag: Optional[float] = None,
     ) -> MatchResult:
         """Run the full pipeline on a single frame.
 
@@ -216,12 +255,29 @@ class Matcher:
                            (xmin,ymin,zmin,xmax,ymax,zmax) or
                            (cx, cy, cz, dx, dy, dz).
             top_k:         How many top matches to keep in `matches` per image.
-            match_threshold: Minimum similarity to include in `matches`.
+            match_threshold: Minimum similarity to include in `matches` (and,
+                           with ``one_to_one``, in `assignment`).
             return_latency: Force the forward-pass timing into the result.
             validate:      Input-protocol policy — "strict" raises on any
                            violation, "warn" (default) raises on hard errors
                            and logs soft warnings once, "off" skips checks.
                            See docs/protocol.md.
+            one_to_one:    Also compute ``result.assignment`` — the OPTIMAL
+                           one-to-one pairing (Hungarian) over the (gated)
+                           similarity. Greedy top-1 can cross-assign two
+                           confident pairs; the optimal assignment cannot.
+            calibration:   A successful :class:`CalibrationResult` (e.g. the
+                           site's solved extrinsics). Enables the geometric
+                           gate: pairs whose 3D center projects behind the
+                           camera or far from the 2D box are vetoed BEFORE the
+                           assignment — appearance similarity cannot override
+                           an impossible geometry. Also fills
+                           ``result.geo_compatible`` / ``result.proj_px``.
+            geo_gate_min_px: Gate radius floor in pixels. Default: the module
+                           constant ``xcalib.assign.GEO_GATE_MIN_PX``. See
+                           :func:`xcalib.assign.geometric_gate`.
+            geo_gate_diag: Gate radius as a multiple of the 2D box diagonal.
+                           Default: ``xcalib.assign.GEO_GATE_DIAG``.
         """
         if validate != "off":
             enforce(
@@ -250,6 +306,11 @@ class Matcher:
         else:
             top_idx = scores.argmax(axis=1).astype(np.int64)
 
+        # kept-index -> original-index maps (prepare_frame may drop boxes)
+        rows_orig = kept_2d if kept_2d.size else np.arange(scores.shape[0], dtype=np.int64)
+        cols_orig = kept_3d if kept_3d.size else np.arange(scores.shape[1] if scores.ndim == 2 else 0,
+                                                           dtype=np.int64)
+
         # explicit (img, lid, score) triples above threshold
         matches: List[Tuple[int, int, float]] = []
         if scores.size:
@@ -261,9 +322,32 @@ class Matcher:
                     if s >= match_threshold:
                         # Map cropping-survived indices back to the user's
                         # original bbox numbering.
-                        orig_i = int(kept_2d[i]) if kept_2d.size else i
-                        orig_j = int(kept_3d[j]) if kept_3d.size else int(j)
-                        matches.append((orig_i, orig_j, s))
+                        matches.append((int(rows_orig[i]), int(cols_orig[j]), s))
+
+        # geometric gate (needs a calibration) + optimal one-to-one assignment
+        gmask = gdist = None
+        assignment: List[Tuple[int, int, float]] = []
+        if calibration is not None and scores.size:
+            from ..assign import GEO_GATE_DIAG, GEO_GATE_MIN_PX, geometric_gate
+            from ..oneshot.calibration import bbox3d_centers
+
+            centers = bbox3d_centers(bboxes_3d)
+            gmask, gdist = geometric_gate(
+                bboxes_2d[rows_orig], centers[cols_orig], calibration,
+                min_px=GEO_GATE_MIN_PX if geo_gate_min_px is None else geo_gate_min_px,
+                diag_factor=GEO_GATE_DIAG if geo_gate_diag is None else geo_gate_diag,
+            )
+        if one_to_one and scores.size:
+            from ..assign import one_to_one_assign
+
+            # gate with a large FINITE penalty: -inf makes the LAP infeasible
+            # when e.g. a behind-camera box blocks its entire column
+            gated = np.where(gmask, scores, -1e9) if gmask is not None else scores
+            for i, j, _s in one_to_one_assign(gated, threshold=match_threshold):
+                if gmask is not None and not gmask[i, j]:
+                    continue  # a padding pick, never a real pair
+                # report the RAW similarity; the gate only shapes the assignment
+                assignment.append((int(rows_orig[i]), int(cols_orig[j]), float(scores[i, j])))
 
         total_ms = (time.perf_counter() - t_total) * 1000.0
         return MatchResult(
@@ -275,6 +359,9 @@ class Matcher:
             latency_ms=fwd_ms if return_latency else total_ms,
             model=self.model_name,
             device=str(self.device),
+            assignment=assignment,
+            geo_compatible=gmask,
+            proj_px=gdist,
         )
 
     def pair(self, *args, **kwargs) -> MatchResult:

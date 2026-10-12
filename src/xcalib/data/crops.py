@@ -113,6 +113,66 @@ def crop_point_cloud_axis_aligned(
 
 
 # ============================================================================
+# Axis-aligned extents of oriented boxes
+# ============================================================================
+
+def oriented_extents(
+    centers: np.ndarray,
+    dimensions: np.ndarray,
+    rotations: np.ndarray,
+) -> np.ndarray:
+    """Smallest axis-aligned extents that enclose oriented 3D boxes.
+
+    The point-cloud crop above is axis-aligned, so a vehicle turned against the
+    axes is cropped whole only when the box handed to it encloses the vehicle.
+    The box ``centre +/- dimensions / 2`` (the rotation dropped) keeps its
+    length on the x axis whatever the heading, and misses most of a vehicle
+    that lies along y; this returns the enclosing box instead.
+
+    Args:
+        centers:    [M, 3] box centres ``(x, y, z)``.
+        dimensions: [M, 3] full sizes along each box's own axes
+                    ``(length, width, height)``.
+        rotations:  [M, 4] quaternions ``(x, y, z, w)`` turning the box axes
+                    into the world axes. They are normalised; a zero or
+                    non-finite quaternion is an error, not a silent identity.
+
+    Returns:
+        [M, 6] float32 ``(xmin, ymin, zmin, xmax, ymax, zmax)``.
+    """
+    centers = np.asarray(centers, dtype=np.float64).reshape(-1, 3)
+    dimensions = np.asarray(dimensions, dtype=np.float64).reshape(-1, 3)
+    rotations = np.asarray(rotations, dtype=np.float64).reshape(-1, 4)
+    if not (len(centers) == len(dimensions) == len(rotations)):
+        raise ValueError(
+            "centers, dimensions and rotations must have the same length "
+            f"(got {len(centers)}, {len(dimensions)}, {len(rotations)})"
+        )
+    if not (np.isfinite(centers).all() and np.isfinite(dimensions).all()
+            and np.isfinite(rotations).all()):
+        raise ValueError("centers, dimensions and rotations must be finite")
+    norm = np.sqrt((rotations ** 2).sum(axis=1))
+    if (norm < 1e-6).any():
+        raise ValueError("a rotation quaternion has zero length")
+    x, y, z, w = (rotations / norm[:, None]).T
+
+    # Rotation matrix of each unit quaternion; the extent of a rotated box along
+    # a world axis is the sum of |R[axis, j]| * size_j / 2 over its own axes.
+    rot = np.empty((len(x), 3, 3), dtype=np.float64)
+    rot[:, 0, 0] = 1.0 - 2.0 * (y * y + z * z)
+    rot[:, 0, 1] = 2.0 * (x * y - z * w)
+    rot[:, 0, 2] = 2.0 * (x * z + y * w)
+    rot[:, 1, 0] = 2.0 * (x * y + z * w)
+    rot[:, 1, 1] = 1.0 - 2.0 * (x * x + z * z)
+    rot[:, 1, 2] = 2.0 * (y * z - x * w)
+    rot[:, 2, 0] = 2.0 * (x * z - y * w)
+    rot[:, 2, 1] = 2.0 * (y * z + x * w)
+    rot[:, 2, 2] = 1.0 - 2.0 * (x * x + y * y)
+    half = (np.abs(rot) * (np.abs(dimensions)[:, None, :] / 2.0)).sum(axis=2)
+    return np.concatenate([centers - half, centers + half], axis=1).astype(np.float32)
+
+
+# ============================================================================
 # Point-cloud resampling
 # ============================================================================
 

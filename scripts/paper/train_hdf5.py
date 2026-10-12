@@ -8,7 +8,9 @@ historical flags so existing pixi tasks / lab notes stay valid.
 Works with any cache that follows ``docs/hdf5-format.md`` — the public A9
 r02_s01 caches as well as the partner UTC3 / UTC4 caches. Uses the same
 cropping path as `validate_paper.py`, so a freshly trained ``best.pth`` is
-directly comparable to the shipped checkpoints.
+directly comparable to the shipped checkpoints. With ``--box-source envelope``
+the crops use the boxes enclosing each oriented cuboid instead of the stored
+ones; compare such a model with ``validate_paper.py --box-source envelope``.
 
 Supported models::
 
@@ -45,6 +47,7 @@ from xcalib.utils.torch_check import ensure_torch  # noqa: E402
 
 ensure_torch()
 
+from xcalib.data.hdf5_loader import BOX_SOURCES  # noqa: E402
 from xcalib.engine.trainer import TRAINABLE, train  # noqa: E402
 
 
@@ -82,6 +85,10 @@ def main() -> None:
     p.add_argument("--limit-train-frames", type=int, default=None)
     p.add_argument("--limit-val-frames", type=int, default=None)
     p.add_argument("--pairwise-batch-size", type=int, default=64)
+    p.add_argument("--box-source", choices=BOX_SOURCES, default=None,
+                   help="3D boxes that feed the point-cloud crops: 'stored' (the cache's "
+                        "lidar_bbox_3d) or 'envelope' (extents enclosing each oriented cuboid; "
+                        "see docs/hdf5-format.md). Default: the config's box_source, else 'stored'")
     args = p.parse_args()
 
     best = train(
@@ -108,6 +115,7 @@ def main() -> None:
         limit_train_frames=args.limit_train_frames,
         limit_val_frames=args.limit_val_frames,
         pairwise_batch_size=args.pairwise_batch_size,
+        box_source=args.box_source,
     )
     print(f"best checkpoint: {best}")
 

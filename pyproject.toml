@@ -55,10 +55,13 @@ dependencies = [
 onnx = ["onnx>=1.16,<2", "onnxruntime>=1.18,<2"]
 # HDF5-cache training / validation (xcalib.train, scripts/paper/train_hdf5.py).
 train = ["h5py>=3.11,<4"]
+# Standalone review GUI (xcalib-review) — human-in-the-loop match correction.
+gui = ["PySide6>=6.6,<7"]
 dev = [
     "onnx>=1.16,<2",
     "onnxruntime>=1.18,<2",
     "h5py>=3.11,<4",
+    "PySide6>=6.6,<7",
     "pytest>=8,<9",
     "ruff>=0.6",
     "mkdocs-material>=9.5",
@@ -67,6 +70,7 @@ dev = [
 
 [project.scripts]
 xcalib = "xcalib.cli:main"
+xcalib-review = "xcalib.gui.review:main"
 
 [project.urls]
 Repository = "https://github.com/radar-lab/XCalib"
@@ -186,7 +190,7 @@ demo-media = { cmd = "python scripts/make_demo_media.py", description = "Regener
 # ---- Docs (MkDocs Material; deployed by .github/workflows/docs.yml) -------
 docs-serve = { cmd = "mkdocs serve", description = "Preview docs at http://127.0.0.1:8000 with live reload" }
 docs-build = { cmd = "mkdocs build --strict", description = "Build the docs site into site/ (fails on warnings, same as CI)" }
-check-public-docs = { cmd = "python scripts/check_public_docs.py", description = "Fail if public docs or package code expose private upload/release operations" }
+check-public-docs = { cmd = "python scripts/check_public_docs.py", description = "Fail if tracked files expose personal paths, credentials or Hub write-side operations" }
 
 # ---- Misc -----------------------------------------------------------------
 demo = { cmd = "python scripts/infer_demo.py", description = "Single-frame inference demo (append -- --model/--weights/--device)" }
@@ -219,6 +223,7 @@ xcalib = { path = ".", editable = true }
 opencv-python = ">=4.10,<5"
 onnx = ">=1.16,<2"
 onnxruntime = ">=1.18,<2"
+pyside6 = ">=6.6,<7"
 scipy = ">=1.13,<2"
 pytest = ">=8,<9"
 ruff = ">=0.6"

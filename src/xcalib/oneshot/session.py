@@ -112,6 +112,8 @@ class OneShotSession:
         calib_reproj_px: float = 8.0,
         replay_frames: int = 16,
         seed: int = 0,
+        recorder=None,
+        record_lost_frames: bool = True,
     ):
         if matcher.model_name not in SUPPORTED_MODELS:
             raise ValueError(
@@ -123,6 +125,13 @@ class OneShotSession:
         self.match_threshold = float(match_threshold)
         self.accept_confidence = float(accept_confidence)
         self.max_center_dist_px = float(max_center_dist_px)
+        #: Optional :class:`xcalib.capture.SceneRecorder` — frames the matcher
+        #: is LOST on (detections on both sides, zero confident pairs) are
+        #: captured for offline human review when ``record_lost_frames`` is on.
+        #: One-shot self-corrects small drift; the recorder is the escape hatch
+        #: for drift beyond what the pseudo-label gate tolerates.
+        self.recorder = recorder
+        self.record_lost_frames = bool(record_lost_frames)
 
         # Attach identity adapters (no behaviour change until adapt()).
         if not isinstance(matcher.model, AdaptedModel):
@@ -207,6 +216,20 @@ class OneShotSession:
 
         report.bank_size = len(self.bank)
         self._frame_count += 1
+
+        # Escape hatch for drift beyond the pseudo-label gate: frames the
+        # matcher is LOST on go to disk for offline human review + retraining.
+        if self.recorder is not None and self.record_lost_frames:
+            from ..capture import should_record  # noqa: PLC0415
+
+            if should_record(report):
+                try:
+                    fid = self.recorder.save_frame(image, point_cloud, b2, b3)
+                    logger.info(f"observe: no confident pairs — recorded frame "
+                                f"{fid} for human review")
+                except Exception as e:  # noqa: BLE001 — capture must not kill the loop
+                    logger.warning(f"frame capture failed: {e}")
+
         return report
 
     def calibrate(
@@ -216,26 +239,52 @@ class OneShotSession:
         disambiguate: bool = True,
         gate_factor: float = 2.0,
         min_frames: int = 3,
+        refine: bool = False,
     ) -> CalibrationResult:
         """Solve / refresh the projection matrix from the buffered pairs.
 
-        With ``disambiguate=True`` (default since 0.2), the solve is scored over
-        *all* buffered pairs and only adopted as ``self.calibration`` if it is
-        not a degenerate planar-pose "clump". Roadside scenes are nearly planar,
-        so PnP is bistable: the clump pose has a deceptively low *inlier* error
-        but a high full-buffer error (:meth:`CalibrationSession.reprojection_error`).
-        The gate is **accept-latest within ``gate_factor`` × the best full-buffer
-        error seen**, after a ``min_frames`` warm-up — so the calibration keeps
+        With ``refine=True`` the CURRENT session calibration is NUDGED instead
+        of re-solved: LM seeded at the existing pose, adopted only when the
+        median reprojection error over the whole buffer improves (see
+        :func:`refine_projection`). This is the deployed-site path — after
+        weather/vibration shifts the rig a little, a fresh solve from whatever
+        pairs happen to be buffered is not guaranteed to beat the matrix the
+        site already trusts, but a bounded nudge can never make it worse.
+        Requires a calibration (solved earlier or injected via
+        :meth:`set_calibration`).
+
+        With ``disambiguate=True`` (default since 0.2), a FRESH solve is scored
+        over *all* buffered pairs and only adopted as ``self.calibration`` if it
+        is not a degenerate planar-pose "clump". Roadside scenes are nearly
+        planar, so PnP is bistable: the clump pose has a deceptively low
+        *inlier* error but a high full-buffer error
+        (:meth:`CalibrationSession.reprojection_error`). The gate is
+        **accept-latest within ``gate_factor`` × the best full-buffer error
+        seen**, after a ``min_frames`` warm-up — so the calibration keeps
         refining as objects sweep the scene while rejecting the clump. The
         warm-up only applies to the streaming :meth:`observe` flow; a buffer fed
         directly (e.g. via ``calib_session.add_correspondences``) is trusted.
         Pass ``disambiguate=False`` for the pre-0.2 behaviour (adopt any
-        successful solve).
+        successful solve). Keep the fresh solve for first-time setups — a user
+        with no calibration gear can still bootstrap the matrix purely from
+        hand-labelled pairs.
 
         Returns the solve result. ``result.accepted`` reports whether it became
         the session calibration and ``result.buffer_reproj_px`` its full-buffer
         score; a rejected solve leaves the previous ``self.calibration`` intact.
         """
+        if refine:
+            if self.calibration is None or not self.calibration.success:
+                raise ValueError(
+                    "calibrate(refine=True) needs an existing calibration — "
+                    "solve one first or inject it via set_calibration()")
+            result = self.calib_session.refine(self.calibration, min_pairs=min_pairs)
+            if result.accepted:
+                self.calibration = result
+                self.best_reproj_px = min(self.best_reproj_px, result.buffer_reproj_px)
+            logger.info(f"calibrate(refine): {result.message}")
+            return result
+
         result = self.calib_session.solve(self.intrinsics, min_pairs=min_pairs)
         if not result.success:
             return result
@@ -269,6 +318,36 @@ class OneShotSession:
         if not calibration.success:
             raise ValueError("calibration.success is False")
         self.calibration = calibration
+
+    def bank_pairs(
+        self,
+        image: np.ndarray,
+        point_cloud: np.ndarray,
+        bboxes_2d: np.ndarray,
+        bboxes_3d: np.ndarray,
+        pairs: List[Tuple[int, int, float]] | List[Tuple[int, int]],
+    ) -> int:
+        """Bank KNOWN-correct correspondences — the supervised counterpart of
+        :meth:`observe`.
+
+        ``pairs`` are ``(img_idx, lid_idx[, confidence])`` in the caller's
+        bbox numbering; confidence defaults to 1.0. Human-verified matches
+        (e.g. a review UI's accepted pairs) go straight into the FeatureBank
+        with no calibration or pseudo-label gating — ground truth outranks
+        both. Follow with :meth:`adapt` once enough pairs are banked.
+
+        Returns the number of pairs actually banked (pairs whose crops were
+        dropped during preparation are skipped).
+        """
+        b2 = np.asarray(bboxes_2d, dtype=np.float32).reshape(-1, 4)
+        b3 = np.asarray(bboxes_3d, dtype=np.float32).reshape(-1, 6)
+        norm = [(int(p[0]), int(p[1]), float(p[2]) if len(p) > 2 else 1.0) for p in pairs]
+        if not norm:
+            return 0
+        banked, _conf = self._bank_frame(
+            image, np.asarray(point_cloud, dtype=np.float32), b2, b3, norm
+        )
+        return int(banked)
 
     def adapt(
         self,

@@ -14,9 +14,16 @@ The lab's HDF5 layout (UTC variant) looks like:
         camera_bbox_2d                         - [num_camera, 4]
         camera_names                           - [num_camera] bytes (per-detection source camera)
         lidar_bbox_3d                          - [num_lidar, 6] (xmin,ymin,zmin,xmax,ymax,zmax)
+        lidar_centers / lidar_dimensions /
+        lidar_rotations                        - optional [num_lidar, 3] / [num_lidar, 3] /
+                                                 [num_lidar, 4] oriented cuboids (A9)
         match_matrix                           - [num_camera, num_lidar] bool
 
 `/calibration` is absent for UTC.
+
+3D boxes: ``box_source="stored"`` (default) returns ``lidar_bbox_3d`` as written;
+``box_source="envelope"`` returns the axis-aligned extents that enclose each oriented
+cuboid, for caches whose ``lidar_bbox_3d`` does not (see ``docs/hdf5-format.md``).
 """
 
 from __future__ import annotations
@@ -29,6 +36,49 @@ import cv2
 import h5py
 import numpy as np
 from loguru import logger
+
+from .crops import oriented_extents
+
+#: Where a frame's 3D boxes come from: the cache's ``lidar_bbox_3d`` as written, or
+#: the extents that enclose each oriented cuboid of the cache.
+BOX_SOURCES = ("stored", "envelope")
+
+_ORIENTED_FIELDS = ("lidar_centers", "lidar_dimensions", "lidar_rotations")
+
+
+def _first_usable_frame(labels, frame_keys):
+    """The first label group that ``get_frame`` would hand out (detections on both sides), or None."""
+    for key in frame_keys:
+        group = labels[key]
+        try:
+            if int(group["num_camera_detections"][()]) > 0 and int(group["num_lidar_detections"][()]) > 0:
+                return group
+        except KeyError:
+            continue
+    return None
+
+
+def _read_boxes_3d(labels_grp, num_lidar: int, box_source: str) -> np.ndarray:
+    """One frame's LiDAR boxes as ``[M, 6]`` float32 axis-aligned extents.
+
+    ``stored`` is ``lidar_bbox_3d`` exactly as the cache holds it. ``envelope`` is the
+    tight axis-aligned box around each oriented cuboid (``lidar_centers``,
+    ``lidar_dimensions``, ``lidar_rotations`` as ``x, y, z, w`` quaternions), which is
+    what the axis-aligned point-cloud crop needs to hold a turned vehicle whole.
+    """
+    if box_source == "stored":
+        return labels_grp["lidar_bbox_3d"][:num_lidar].astype(np.float32)
+    missing = [name for name in _ORIENTED_FIELDS if name not in labels_grp]
+    if missing:
+        raise ValueError(
+            "box_source='envelope' needs the oriented cuboid of every box, but this "
+            f"frame has no {', '.join(missing)}; use box_source='stored'"
+        )
+    return oriented_extents(
+        labels_grp["lidar_centers"][:num_lidar],
+        labels_grp["lidar_dimensions"][:num_lidar],
+        labels_grp["lidar_rotations"][:num_lidar],
+    )
 
 
 @dataclass
@@ -121,9 +171,24 @@ def _read_calibration(
 
 
 class UTCFrameLoader:
-    """Iterates over frames of a UTC HDF5 cache without touching torch."""
+    """Iterates over frames of a UTC HDF5 cache without touching torch.
 
-    def __init__(self, hdf5_path: str | Path):
+    Args:
+        hdf5_path: The cache file.
+        box_source: ``"stored"`` (default) hands out ``lidar_bbox_3d`` as the cache
+            holds it. ``"envelope"`` hands out the axis-aligned extents that enclose
+            each oriented cuboid (``lidar_centers``, ``lidar_dimensions``,
+            ``lidar_rotations``), for caches whose ``lidar_bbox_3d`` is the box with
+            its rotation dropped and so misses a vehicle that is turned against the
+            axes. Raises :class:`ValueError` when the cache has no oriented cuboids.
+    """
+
+    def __init__(self, hdf5_path: str | Path, box_source: str = "stored"):
+        if box_source not in BOX_SOURCES:
+            raise ValueError(
+                f"box_source must be one of {', '.join(BOX_SOURCES)} (got {box_source!r})"
+            )
+        self.box_source = box_source
         self.hdf5_path = Path(hdf5_path)
         if not self.hdf5_path.exists():
             raise FileNotFoundError(f"HDF5 not found: {self.hdf5_path}")
@@ -139,6 +204,17 @@ class UTCFrameLoader:
             else:
                 self.label_sensor = label_sensors[0]
                 self.frame_keys = sorted(f["labels"][self.label_sensor].keys())
+                if box_source == "envelope":
+                    # Fail here, not on the first frame of a long run: look at the first
+                    # frame get_frame would actually hand out.
+                    probe = _first_usable_frame(f["labels"][self.label_sensor], self.frame_keys)
+                    missing = [n for n in _ORIENTED_FIELDS if probe is not None and n not in probe]
+                    if missing:
+                        raise ValueError(
+                            f"{self.hdf5_path.name}: box_source='envelope' needs "
+                            f"{', '.join(_ORIENTED_FIELDS)}, but the cache has no "
+                            f"{', '.join(missing)}; use box_source='stored'"
+                        )
 
         logger.info(
             f"UTCFrameLoader: {self.hdf5_path.name} | "
@@ -201,7 +277,10 @@ class UTCFrameLoader:
 
         # 2D + 3D bboxes
         bbox_2d_all = labels_grp["camera_bbox_2d"][:num_camera].astype(np.float32)
-        lidar_bbox_3d = labels_grp["lidar_bbox_3d"][:num_lidar].astype(np.float32)
+        try:
+            lidar_bbox_3d = _read_boxes_3d(labels_grp, num_lidar, self.box_source)
+        except ValueError as e:
+            raise ValueError(f"{self.hdf5_path.name} frame {frame_key}: {e}") from e
         match_matrix = labels_grp["match_matrix"][:num_camera, :num_lidar].astype(bool)
 
         # Per-detection source camera (multi-camera caches such as A9 store

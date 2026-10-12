@@ -12,6 +12,7 @@ Run with:
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,7 @@ h5py = pytest.importorskip("h5py")
 import cv2  # noqa: E402
 
 from xcalib import Matcher  # noqa: E402
+from xcalib.engine import trainer as trainer_module  # noqa: E402
 from xcalib.engine.trainer import TRAINABLE, epoch_lr, train  # noqa: E402
 from xcalib.models.registry import build_model  # noqa: E402
 from xcalib.utils.config import load_yaml  # noqa: E402
@@ -36,7 +38,9 @@ MODEL = "crlite_vit_exp1"  # cosine-only objective; cheapest trainable model
 # Synthetic cache builder (UTC layout, 1 camera / 1 lidar)
 # ---------------------------------------------------------------------------
 
-def _write_cache(path: Path, n_frames: int = 3, K: int = 2, M: int = 2) -> Path:
+def _write_cache(
+    path: Path, n_frames: int = 3, K: int = 2, M: int = 2, oriented: bool = False
+) -> Path:
     rng = np.random.default_rng(7)
     b2 = np.array([[10, 10, 80, 80], [120, 100, 200, 180]], dtype=np.float32)[:K]
     b3 = np.array(
@@ -69,12 +73,25 @@ def _write_cache(path: Path, n_frames: int = 3, K: int = 2, M: int = 2) -> Path:
             g.create_dataset("camera_bbox_2d", data=b2)
             g.create_dataset("lidar_bbox_3d", data=b3)
             g.create_dataset("match_matrix", data=np.eye(K, M, dtype=bool))
+            if oriented:
+                # Each box also as a 4 x 1 x 2 cuboid turned a quarter turn about z, as the A9 caches
+                # carry oriented cuboids: its enclosing extents (1 wide in x, 4 long in y) differ from
+                # the stored box, so which source feeds the crops shows.
+                quarter = np.float32(math.sin(math.pi / 4))
+                g.create_dataset("lidar_centers", data=(b3[:, :3] + b3[:, 3:]) / 2)
+                g.create_dataset("lidar_dimensions", data=np.tile(np.array([4.0, 1.0, 2.0], np.float32), (M, 1)))
+                g.create_dataset("lidar_rotations", data=np.tile(np.array([0, 0, quarter, quarter], np.float32), (M, 1)))
     return path
 
 
 @pytest.fixture(scope="module")
 def tiny_cache(tmp_path_factory) -> Path:
     return _write_cache(tmp_path_factory.mktemp("hdf5") / "tiny.h5")
+
+
+@pytest.fixture(scope="module")
+def oriented_cache(tmp_path_factory) -> Path:
+    return _write_cache(tmp_path_factory.mktemp("hdf5") / "oriented.h5", oriented=True)
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +140,94 @@ def test_train_by_name(tiny_cache, tmp_path):
     ckpt = torch.load(best, map_location="cpu", weights_only=False)
     assert "model_state_dict" in ckpt and "metrics" in ckpt
     assert ckpt["train_args"]["model"] == MODEL
+    # Without a choice the stored boxes are used, and the checkpoint says so.
+    assert ckpt["train_args"]["box_source"] == "stored"
+
+
+def test_train_with_the_enclosing_boxes_records_the_choice(oriented_cache, tmp_path):
+    best = train(
+        MODEL,
+        oriented_cache,
+        oriented_cache,
+        epochs=1,
+        device="cpu",
+        output_dir=tmp_path / "envelope",
+        pairwise_batch_size=8,
+        box_source="envelope",
+    )
+    ckpt = torch.load(best, map_location="cpu", weights_only=False)
+    assert ckpt["train_args"]["box_source"] == "envelope"
+
+
+def test_envelope_boxes_need_oriented_cuboids_in_the_cache(tiny_cache, tmp_path):
+    with pytest.raises(ValueError, match="lidar_centers"):
+        train(
+            MODEL, tiny_cache, tiny_cache, epochs=1, device="cpu",
+            output_dir=tmp_path, box_source="envelope",
+        )
+
+
+def test_unknown_box_source_is_rejected_before_any_model_is_built(tiny_cache, tmp_path, monkeypatch):
+    def no_model(*args, **kwargs):
+        raise AssertionError("a model was built before box_source was checked")
+
+    monkeypatch.setattr(trainer_module, "build_model", no_model)
+    with pytest.raises(ValueError, match="box_source must be one of stored, envelope"):
+        train(
+            MODEL, tiny_cache, tiny_cache, epochs=1, device="cpu",
+            output_dir=tmp_path, box_source="hull",
+        )
+
+
+def test_the_box_source_reaches_both_the_training_and_the_validation_loader(tmp_path, monkeypatch):
+    train_cache = _write_cache(tmp_path / "train.h5", oriented=True)
+    val_cache = _write_cache(tmp_path / "val.h5", oriented=True)
+    real, seen = trainer_module.UTCFrameLoader, []
+
+    class Spy(real):
+        def __init__(self, path, box_source="stored"):
+            seen.append((Path(path).name, box_source))
+            super().__init__(path, box_source=box_source)
+
+    monkeypatch.setattr(trainer_module, "UTCFrameLoader", Spy)
+    kwargs = dict(epochs=1, device="cpu", pairwise_batch_size=8)
+
+    train(MODEL, train_cache, val_cache, output_dir=tmp_path / "envelope", box_source="envelope", **kwargs)
+    assert {name for name, _ in seen} == {"train.h5", "val.h5"}
+    assert {source for _, source in seen} == {"envelope"}
+
+    seen.clear()
+    train(MODEL, train_cache, val_cache, output_dir=tmp_path / "default", **kwargs)
+    assert {name for name, _ in seen} == {"train.h5", "val.h5"}
+    assert {source for _, source in seen} == {"stored"}
+
+
+def test_box_source_from_the_config_and_the_argument_that_overrides_it(oriented_cache, tmp_path):
+    cfg = load_yaml(default_config_path(MODEL, "utc4"))
+    cfg.set("box_source", "envelope")
+    kwargs = dict(config=cfg, epochs=1, device="cpu", pairwise_batch_size=8)
+
+    from_config = train(MODEL, oriented_cache, oriented_cache, output_dir=tmp_path / "cfg", **kwargs)
+    assert torch.load(from_config, map_location="cpu", weights_only=False)["train_args"]["box_source"] == "envelope"
+
+    overridden = train(
+        MODEL, oriented_cache, oriented_cache, output_dir=tmp_path / "arg", box_source="stored", **kwargs
+    )
+    assert torch.load(overridden, map_location="cpu", weights_only=False)["train_args"]["box_source"] == "stored"
+
+
+def test_a_validation_cache_without_oriented_cuboids_fails_before_the_first_epoch(
+    oriented_cache, tiny_cache, tmp_path, monkeypatch
+):
+    def no_epoch(**kwargs):
+        raise AssertionError("a training epoch ran before the validation cache was checked")
+
+    monkeypatch.setattr(trainer_module, "run_epoch_train", no_epoch)
+    with pytest.raises(ValueError, match="lidar_centers"):
+        train(
+            MODEL, oriented_cache, tiny_cache, epochs=1, device="cpu",
+            output_dir=tmp_path, box_source="envelope",
+        )
 
 
 def test_matcher_train_finetune(tiny_cache, tmp_path):

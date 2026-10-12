@@ -11,6 +11,7 @@ from .crops import (
     PrepareConfig,
     crop_image_bbox,
     crop_point_cloud_axis_aligned,
+    oriented_extents,
     resample_point_cloud,
     prepare_frame,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "PrepareConfig",
     "crop_image_bbox",
     "crop_point_cloud_axis_aligned",
+    "oriented_extents",
     "resample_point_cloud",
     "prepare_frame",
     "UTCFrameLoader",

@@ -1,15 +1,14 @@
 ﻿"""
 Structure-Aware Edge-Aware GAT modules for CRLite-ViT Exp4.
 
-Verbatim port of `src/core/models/crlite_vit_exp4/gnn.py`. State-dict keys
-are preserved exactly so trained weights load without renaming. All ops are
-pure PyTorch (no torch-geometric, no custom CUDA), which is what we need
+State-dict keys are fixed so trained weights load without renaming. All ops
+are pure PyTorch (no torch-geometric, no custom CUDA), which is what we need
 for Jetson AGX Thor + TensorRT.
 
 Two graphs are built dynamically from the detection geometry of each frame:
 
-- `CameraGNN`: 2D detections, edges over (螖u, 螖v, log_scale_ratio).
-- `LiDARGNN`: 3D detections, edges over (螖x, 螖y, 螖z, distance, log_size_ratio).
+- `CameraGNN`: 2D detections, edges over (Δu, Δv, log_scale_ratio).
+- `LiDARGNN`: 3D detections, edges over (Δx, Δy, Δz, distance, log_size_ratio).
 
 Both run the same `EdgeAwareGATLayer` block stacked `num_layers` deep.
 """
@@ -171,7 +170,7 @@ class CameraGNN(nn.Module):
         self.k_neighbors = k_neighbors
         self.num_layers = num_layers
 
-        # Raw edge features: (螖u, 螖v, log_scale_ratio)
+        # Raw edge features: (Δu, Δv, log_scale_ratio)
         self.edge_encoder = nn.Sequential(
             nn.Linear(3, edge_dim),
             nn.GELU(),
@@ -300,7 +299,7 @@ class LiDARGNN(nn.Module):
         self.k_neighbors = k_neighbors
         self.num_layers = num_layers
 
-        # Raw edge features: (螖x, 螖y, 螖z, distance, log_size_ratio)
+        # Raw edge features: (Δx, Δy, Δz, distance, log_size_ratio)
         self.edge_encoder = nn.Sequential(
             nn.Linear(5, edge_dim),
             nn.GELU(),
