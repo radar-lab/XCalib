@@ -17,6 +17,11 @@ Camera-LiDAR cross-modal matching for edge devices, behind one small API:
   with a gated continual refine ([continual refine](docs/continual-refine.md)).
 - **Capture and review** the frames the matcher is lost on, and fix the wrong pairs in a
   Qt window ([review GUI](docs/review-gui.md)).
+- **Annotate** a raw delivery into a scene: import it with draft boxes, confirm the pairs in the
+  review window, fine-tune the LiDAR boxes in
+  [SUSTechPOINTS](docs/review-gui.md#look-at-a-scene-in-sustechpoints), and fit a pair-based
+  [homography](docs/review-gui.md#the-homography-from-the-saved-pairs) with the
+  [homography notebook](demo/xcalib_homography_en.ipynb).
 - **Deploy** with ONNX/TensorRT export and **train** on HDF5 caches.
 
 `xcalib` is the deployment package for the matching front-end studied in
@@ -77,7 +82,10 @@ pixi run smoke          # quick synthetic-frame smoke tests
 > [`demo/xcalib_quickstart.ipynb`](demo/xcalib_quickstart.ipynb) locally or in
 > [Colab](https://colab.research.google.com/github/radar-lab/XCalib/blob/main/demo/xcalib_quickstart.ipynb).
 > The continual-refine flow has its own notebook,
-> [`demo/refine_unification.ipynb`](demo/refine_unification.ipynb).
+> [`demo/refine_unification.ipynb`](demo/refine_unification.ipynb), and the annotation flow —
+> raw delivery to scene, pairs, model, homography — runs in
+> [`demo/xcalib_homography_en.ipynb`](demo/xcalib_homography_en.ipynb)
+> (steps: [`demo/README.md`](demo/README.md)).
 
 ```python
 import cv2, numpy as np
@@ -242,6 +250,8 @@ xcalib pull-weights --model crlite --site a9_dataset_r02_s01
 xcalib pull-dataset --site a9_dataset_r02_s01 --split test
 xcalib version
 xcalib-review --scene capture/site1 --camera cam_front   # review window; needs XCalib[gui]
+xcalib-export-scene --scene capture/site1 --camera cam_front \
+                    --frames-file train-frames.txt --output train.h5   # reviewed pairs → HDF5 cache
 ```
 
 ## Reproducing the paper
@@ -274,7 +284,7 @@ Frozen evaluation summaries cited by the supplemental:
 │   ├── models/               architectures + registry
 │   ├── oneshot/              PnP/RANSAC calibration + refinement, pseudo-labels, adapters
 │   ├── continual/            corrections corpus, gated continual refine, revisions
-│   ├── gui/                  `xcalib-review` Qt window + scene IO
+│   ├── gui/                  `xcalib-review` Qt window, scene IO, notebook pairing workflow
 │   ├── hub/                  Hub download helpers for weights + datasets
 │   ├── data/                 cropping helpers + HDF5 loader (lazy h5py)
 │   ├── utils/                config, io, metrics, torch_check
@@ -285,9 +295,9 @@ Frozen evaluation summaries cited by the supplemental:
 │   ├── visualization.py      matching + calibration overlays
 │   ├── protocol.py           input contract (validate_frame_inputs, intrinsics)
 │   └── cli.py                `xcalib` console entry point
-├── scripts/                  public demos, smoke helpers, and docs guards
+├── scripts/                  public demos, SUSTechPOINTS launcher, delivery tools, docs guards
 │   └── paper/                paper validation, export, TRT, and benchmark scripts
-├── demo/                     quickstart + continual-refine notebooks, numbered scripts
+├── demo/                     quickstart, refine and homography notebooks, numbered scripts
 ├── tests/                    grouped pytest suite (smoke/unit/integration)
 ├── docs/                     docs site sources (see mkdocs.yml nav)
 │   ├── agents/               contributor workflow, code index, conventions
@@ -308,9 +318,26 @@ submodules is internal and may change without notice.
 Code is licensed under [Apache-2.0](LICENSE). The A9/TUM Traffic dataset has
 its own CC BY-NC-ND 4.0 terms.
 
-If you use this package in academic work, please cite the xcalib paper. The
-entry below is accepted-paper metadata; replace the paper URL / DOI once the
-publisher page is live:
+If you use this package — the matchers, the calibration, or the annotation
+tooling (which is newer than the paper) — citing the software is enough:
+
+```bibtex
+@software{guo2026xcalib-software,
+  author  = {Guo, Lihao and Ji, Neng and Cao, Siyang},
+  title   = {XCalib: Camera-LiDAR Cross-Modal Matching for Edge Devices},
+  year    = {2026},
+  publisher = {GitHub},
+  journal = {GitHub repository},
+  url     = {https://github.com/radar-lab/XCalib},
+  version = {0.4.0},
+  license = {Apache-2.0},
+}
+```
+
+The same entry is in [`CITATION.cff`](CITATION.cff), which GitHub shows on the
+repository page. For the diagnostic study behind the matching front-end, cite
+the paper instead or as well. The entry below is accepted-paper metadata;
+replace the paper URL / DOI once the publisher page is live:
 
 ```bibtex
 @article{guo2026xcalib,

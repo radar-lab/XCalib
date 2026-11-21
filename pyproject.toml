@@ -71,6 +71,7 @@ dev = [
 [project.scripts]
 xcalib = "xcalib.cli:main"
 xcalib-review = "xcalib.gui.review:main"
+xcalib-export-scene = "xcalib.gui.workflow:main"
 
 [project.urls]
 Repository = "https://github.com/radar-lab/XCalib"
@@ -105,6 +106,7 @@ exclude = ["**/__pycache__", "**/*.pyc", "demo"]
 line-length = 100
 target-version = "py310"
 src = ["src", "tests", "scripts"]
+extend-exclude = ["third_party/SUSTechPOINTS"]
 
 [tool.ruff.lint]
 # Default pycodestyle/pyflakes set; style-only rules stay off so lab scripts
@@ -132,6 +134,7 @@ channels = ["conda-forge"]
 platforms = ["linux-aarch64", "linux-64", "win-64", "osx-arm64"]
 
 [tool.pixi.tasks]
+sustech = { cmd = "python scripts/launch_sustech.py", description = "Launch SUSTechPOINTS with an external scene directory and model" }
 # ---- Paper validation (PyTorch, dev box; uses CUDA when available) -------
 validate-utc4 = { cmd = "python scripts/paper/validate_paper.py --site utc4", description = "Verify UTC4 Table I reference numbers (requires local institutional HDF5/weights)" }
 validate-utc3 = { cmd = "python scripts/paper/validate_paper.py --site utc3", description = "Verify UTC3 Table I reference numbers (requires local institutional HDF5/weights)" }

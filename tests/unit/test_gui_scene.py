@@ -18,6 +18,7 @@ from xcalib import MatchResult
 from xcalib.gui.scene import (
     Scene,
     box3d_to_extents,
+    load_points,
     load_points_xyz,
     match_review,
 )
@@ -112,6 +113,21 @@ def test_load_points_formats(tmp_path):
            + "\n".join(" ".join(str(v) for v in row) for row in pts))
     (tmp_path / "c.pcd").write_text(pcd)
     assert np.allclose(load_points_xyz(str(tmp_path / "c.pcd")), pts)
+    (tmp_path / "broken.pcd").write_text("FIELDS x y z\n")
+    with pytest.raises(ValueError, match="incomplete PCD header"):
+        load_points_xyz(str(tmp_path / "broken.pcd"))
+    # Sensors store 1- and 2-byte fields beside the float coordinates.
+    mixed = np.zeros(4, dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("reflectivity", "u1"),
+                               ("ring", "<u2"), ("intensity", "<f4")])
+    mixed["x"], mixed["y"], mixed["z"] = pts.T
+    mixed["ring"], mixed["intensity"] = 7, [1, 2, 3, 4]
+    header = ("VERSION .7\nFIELDS x y z reflectivity ring intensity\nSIZE 4 4 4 1 2 4\n"
+              "TYPE F F F U U F\nCOUNT 1 1 1 1 1 1\nWIDTH 4\nHEIGHT 1\nPOINTS 4\nDATA binary\n").encode()
+    (tmp_path / "d.pcd").write_bytes(header + mixed.tobytes())
+    assert np.allclose(load_points(str(tmp_path / "d.pcd")), np.c_[pts, [1, 2, 3, 4]])
+    (tmp_path / "short.pcd").write_bytes(header + mixed[:3].tobytes())
+    with pytest.raises(ValueError, match="shorter"):
+        load_points_xyz(str(tmp_path / "short.pcd"))
 
 
 # ------------------------------------------------------------------- apply --
@@ -139,6 +155,20 @@ def test_apply_accept_reject_supersede(tmp_path):
     # unknown rect coordinates are skipped
     assert scene.apply("f0", [{"rect": [1, 2, 3, 4], "lidar_id": "9"}]) == \
         {"written": 0, "marked": 0}
+
+
+def test_a_saved_pair_clears_the_machine_mark_of_a_draft(tmp_path):
+    """A camera box imported as a draft carries an annotator until a decision is saved."""
+    scene = _write_scene(tmp_path)
+    path = tmp_path / "S" / "label_fusion" / "camera" / "cam" / "f0.json"
+    data = json.loads(path.read_text())
+    data["objs"][0]["annotator"] = "vendor-cam-draft"
+    path.write_text(json.dumps(data))
+
+    scene.apply("f0", [{"rect": [10, 10, 50, 40], "lidar_id": "9", "annotator": "machine"}])
+
+    saved = scene.load_rects("f0")[0]
+    assert saved["obj_id"] == "9" and "annotator" not in saved
 
 
 # ----------------------------------------------------------- review builder --
@@ -174,8 +204,9 @@ class _StubMatcher:
 
 def test_match_review_assembles_tracks(tmp_path):
     scene = _write_scene(tmp_path)
-    # appearance PREFERS the wrong box for t4 (row 0): sim row0 = [0.2, 0.9]
-    # but box "9" (col 1) projects far from rect t4 — the gate must veto it.
+    # The model prefers box "9" for t4 (row 0): sim row0 = [0.2, 0.9]. Box "9"
+    # projects far from rect t4, which is shown to the reviewer and decides
+    # nothing: the suggestion is the model's alone.
     review = match_review(_StubMatcher([[0.2, 0.9], [0.95, 0.1]]), scene, "f0",
                           threshold=0.1)
     assert review.n_rects == 2 and review.n_boxes == 2
@@ -189,20 +220,33 @@ def test_match_review_assembles_tracks(tmp_path):
 
     t4 = by_key["4"]
     assert t4.applied_id == "" and not t4.rejected
-    # geometry vetoed the appearance-favoured wrong box
     opt9 = next(o for o in t4.options if o["lidar_id"] == "9")
-    assert opt9["geo_ok"] is False
-    assert t4.suggestion in ("", "7")    # never "9"
-    # geo-ok candidates sort before geo-blocked ones regardless of score
-    assert [o["geo_ok"] for o in t4.options] == sorted(
-        [o["geo_ok"] for o in t4.options], reverse=True)
+    assert opt9["geo_ok"] is False       # the hint is still there
+    assert t4.suggestion == "9"          # and does not overrule the model
+    # candidates are listed in the model's order, whatever the geometry says
+    assert [o["lidar_id"] for o in t4.options] == ["9", "7"]
+
+
+def test_a_camera_box_without_a_partner_does_not_take_the_box_of_a_pair(tmp_path):
+    scene = _write_scene(tmp_path)
+    # Rows are t4, t3; columns are boxes "7", "9". t3 belongs to "7" (0.9) and
+    # t4 has no partner (0.45 and 0.05, both under the threshold). The largest
+    # total over all four entries is t4-"7" + t3-"9" = 1.05, which would hand
+    # t3 the wrong box and leave t4 with a pair that is dropped afterwards.
+    # Only entries at or above the threshold take part, so t3 keeps "7".
+    review = match_review(_StubMatcher([[0.45, 0.05], [0.9, 0.6]]), scene, "f0",
+                          threshold=0.5)
+    by_key = {t.key: t for t in review.tracks}
+    assert by_key["3"].suggestion == "7"
+    assert by_key["4"].suggestion == ""
 
 
 def test_match_review_empty_frame(tmp_path):
     scene = _write_scene(tmp_path)
     os.remove(os.path.join(scene.root, "label", "f0.json"))
     review = match_review(_StubMatcher(np.zeros((2, 2))), scene, "f0")
-    assert review.tracks == [] and review.n_boxes == 0
+    assert len(review.tracks) == 2 and review.n_boxes == 0
+    assert all(not track.options for track in review.tracks)
 
 
 class _DropBoxMatcher:
@@ -280,10 +324,14 @@ def test_review_window_offscreen(tmp_path, monkeypatch):
         # picking + one-to-one: assigning 7 to t4 steals it from t3
         win._pick("4", "7")
         assert win.assign["4"] == "7" and win.assign["3"] is None
-        # the decision list is a diff vs the labels (t3 lost its saved id -> none? no:
-        # unassigned without explicit rejection stages nothing; t4's accept stages)
+        # Stealing an already saved ID also clears the old association on disk.
         keys = {d["_key"]: d for d in win._decisions()}
         assert "4" in keys and keys["4"]["lidar_id"] == "7"
+        assert keys["3"]["clear"] is True
+        win._bank_current()
+        win._on_review(review, image, points)
+        assert win.assign["4"] == "7" and win.assign["3"] is None
+        assert {d["_key"] for d in win._decisions()} == {"3", "4"}
         # explicit rejection stages a none decision
         win._pick("4", None)
         keys = {d["_key"]: d for d in win._decisions()}
@@ -291,4 +339,87 @@ def test_review_window_offscreen(tmp_path, monkeypatch):
     finally:
         win.worker.submit("quit")
         win.worker.wait(3000)
+        win.close()
+
+
+def test_a_proposal_left_as_it_is_is_saved_by_apply(tmp_path, monkeypatch):
+    """Apply saves a frame as it is shown: the model's suggestion counts as right unless it is changed."""
+    pytest.importorskip("PySide6.QtWidgets")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from xcalib.gui.review import ReviewWindow
+    from xcalib.gui.scene import FrameReview, TrackEntry
+
+    scene = _write_scene(tmp_path, frames=("f0", "f1", "f2", "f3"))
+    app = QApplication.instance() or QApplication([])
+    win = ReviewWindow(scene)
+
+    def show(frame):
+        win.cur = frame
+        win._on_review(FrameReview(frame=frame, boxes=scene.load_boxes(frame), tracks=[
+            TrackEntry(key="4", rect=[10, 10, 50, 40], suggestion="9", options=[
+                {"lidar_id": "9", "score": 0.9, "proj_px": None, "geo_ok": True}])]),
+            np.zeros((120, 160, 3), np.uint8), None)
+
+    try:
+        show("f0")
+        assert win.assign["4"] == "9" and "4" not in win.touched
+        assert [(d["_key"], d["lidar_id"]) for d in win._decisions()] == [("4", "9")]
+        assert scene.load_rects("f0")[0]["obj_id"] == ""   # shown is not saved: Apply saves
+        win._apply_frame()
+        assert scene.load_rects("f0")[0]["obj_id"] == "9"
+
+        show("f1")
+        win._pick("4", None)                                 # a wrong suggestion is changed, here to "none"
+        assert [(d["_key"], d.get("none")) for d in win._decisions()] == [("4", True)]
+        show("f2")                                           # looked at and left as it is
+        assert sorted(win.staged) == ["f1", "f2"]
+        show("f2")
+        assert "4" not in win.touched and win.assign["4"] == "9"   # still the model's suggestion
+        win._apply_all()                                     # every frame that was looked at
+        saved = {frame: scene.load_rects(frame)[0] for frame in ("f1", "f2", "f3")}
+        assert saved["f1"]["no_match"] is True and saved["f1"]["obj_id"] == ""
+        assert saved["f2"]["obj_id"] == "9"
+        assert saved["f3"]["obj_id"] == "" and "no_match" not in saved["f3"]   # never shown: nothing saved
+        assert app is not None
+    finally:
+        win.close()
+
+
+def test_candidate_buttons_sort_by_distance_and_highlight_clicked_box(tmp_path, monkeypatch):
+    pytest.importorskip("PySide6.QtWidgets")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from xcalib.gui.review import ReviewWindow
+    from xcalib.gui.scene import FrameReview, TrackEntry
+
+    scene = _write_scene(tmp_path)
+    app = QApplication.instance() or QApplication([])
+    win = ReviewWindow(scene)
+    try:
+        options = [{"lidar_id": "7", "score": .99, "proj_px": 882, "geo_ok": True},
+                   {"lidar_id": "9", "score": .1, "proj_px": 80, "geo_ok": True}]
+        review = FrameReview(frame="f0", boxes=scene.load_boxes("f0"), tracks=[
+            TrackEntry(key="4", rect=[10, 10, 50, 40], options=options)])
+        win._on_review(review, np.zeros((120, 160, 3), np.uint8),
+                       np.array([[1., 2., 0.], [2., 3., 0.]]))
+        win._select_track("4")
+        labels = [win.cand_lay.itemAt(i).widget().text()
+                  for i in range(win.cand_lay.count()) if win.cand_lay.itemAt(i).widget()]
+        assert labels[2].startswith("#9") and labels[3].startswith("#7")
+        win._pick_bev("9")
+        assert win.assign["4"] == "9" and win.bev_view._last[3] == "9"
+        assert "#9" in win.selection_lbl.text() and "selected" in win.selection_lbl.text()
+        win.show()
+        win.bev_view.setFocus()
+        QTest.keyClick(win.bev_view, Qt.Key_Q)
+        assert win.bev_view._angle_deg == 15
+        QTest.keyClick(win.bev_view, Qt.Key_Plus)
+        assert win.bev_view._zoom > 1
+        QTest.keyClick(win.bev_view, Qt.Key_R)
+        assert win.bev_view._angle_deg == 0 and win.bev_view._zoom == 1
+        assert app is not None
+    finally:
         win.close()

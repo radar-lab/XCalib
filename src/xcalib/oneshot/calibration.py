@@ -209,15 +209,32 @@ def estimate_projection(
         )
 
     idx = inliers.reshape(-1)
+
+    def inlier_error(rvec, tvec):
+        uv, _depth = project_points(pts3[idx], intrinsics, cv2.Rodrigues(rvec)[0], tvec.reshape(3))
+        return float(np.linalg.norm(uv - pts2[idx], axis=1).mean())
+
+    # RANSAC's returned pose is an EPnP refit of the consensus set, and EPnP is
+    # unreliable on nearly coplanar points (object centres on a road): it can
+    # miss its own inliers by hundreds of pixels. SQPnP handles the planar
+    # case, so refit with it too and keep the pose that explains the inliers.
+    candidates = [(rvec, tvec)]
     try:
-        rvec, tvec = cv2.solvePnPRefineLM(pts3[idx], pts2[idx], K, dist, rvec, tvec)
-    except cv2.error:  # refinement is best-effort
+        refit, rvec2, tvec2 = cv2.solvePnP(pts3[idx], pts2[idx], K, dist, flags=cv2.SOLVEPNP_SQPNP)
+        if refit:
+            candidates.append((rvec2, tvec2))
+    except cv2.error:
         pass
+    for i, (r, t) in enumerate(candidates):
+        try:
+            candidates[i] = cv2.solvePnPRefineLM(pts3[idx], pts2[idx], K, dist, r.copy(), t.copy())
+        except cv2.error:  # refinement is best-effort
+            pass
+    rvec, tvec = min(candidates, key=lambda pose: inlier_error(*pose))
 
     R, _ = cv2.Rodrigues(rvec)
     t = tvec.reshape(3)
-    uv, _depth = project_points(pts3[idx], intrinsics, R, t)
-    err = float(np.linalg.norm(uv - pts2[idx], axis=1).mean())
+    err = inlier_error(rvec, tvec)
 
     P = K @ np.hstack([R, t.reshape(3, 1)])
     return CalibrationResult(

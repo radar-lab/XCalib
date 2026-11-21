@@ -1,0 +1,33 @@
+# This CITATION file is for the software. Citing the software is enough when
+# you use the package or its annotation tooling; the paper entry in README.md
+# covers the diagnostic study behind the matching front-end.
+cff-version: 1.2.0
+message: "If you use XCalib, please cite this software."
+title: XCalib
+abstract: "Camera-LiDAR cross-modal matching for edge devices: pretrained
+  matchers, targetless calibration, ONNX/TensorRT export, training, one-shot
+  adaptation, a review GUI, and a delivery-to-scene annotation workflow with a
+  pair-fitted homography."
+type: software
+authors:
+  - family-names: Guo
+    given-names: Lihao
+    email: leolihao@arizona.edu
+    affiliation: University of Arizona
+  - family-names: Ji
+    given-names: Neng
+    affiliation: University of Arizona
+  - family-names: Cao
+    given-names: Siyang
+    affiliation: University of Arizona
+repository-code: "https://github.com/radar-lab/XCalib"
+url: "https://radar-lab.github.io/XCalib/"
+keywords:
+  - camera-LiDAR matching
+  - targetless calibration
+  - cross-modal matching
+  - LiDAR-camera extrinsic calibration
+  - data annotation
+license: Apache-2.0
+version: 0.4.0
+date-released: "2026-11-21"

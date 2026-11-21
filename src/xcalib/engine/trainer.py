@@ -133,6 +133,7 @@ def _train_loss(
     label_smoothing: float,
     w1: float,
     w2: float,
+    none_weight: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     loss = torch.zeros((), device=gt_bool.device)
     diag: dict[str, float] = {}
@@ -150,6 +151,18 @@ def _train_loss(
         )
         loss = loss + w2 * ls2
         diag["stage2_loss"] = float(ls2.detach().cpu())
+    if none_weight > 0 and "stage2_similarity" in out:
+        # The row-wise cross-entropy only ranks a camera box's candidates. This
+        # term makes the second-stage score absolute: every (camera box, LiDAR
+        # box) entry is pushed above zero when it is a pair and below zero when
+        # it is not, so a camera box without a partner scores all of them low.
+        logits = out["stage2_similarity"] / max(temperature, 1e-6)
+        target = gt_bool.float()
+        positives = target.sum().clamp(min=1.0)
+        pos_weight = ((target.numel() - positives) / positives).clamp(max=10.0)  # pairs are few
+        none = F.binary_cross_entropy_with_logits(logits, target, pos_weight=pos_weight)
+        loss = loss + none_weight * none
+        diag["none_loss"] = float(none.detach().cpu())
     return loss, diag
 
 
@@ -219,6 +232,7 @@ def run_epoch_train(
     w1: float,
     w2: float,
     rng: np.random.Generator,
+    none_weight: float = 0.0,
 ) -> float:
     model.train()
     keys = list(frame_keys)
@@ -245,13 +259,19 @@ def run_epoch_train(
             continue
         if frame.crops_2d.numel() == 0 or frame.crops_3d.numel() == 0:
             continue
+        # The boxes of one frame are one batch, and batch normalisation cannot train
+        # on a batch of one: a frame with a single camera box or a single LiDAR box
+        # is left out of training (it still counts in validation).
+        if frame.crops_2d.shape[0] < 2 or frame.crops_3d.shape[0] < 2:
+            continue
         gt = torch.from_numpy(_filter_match_matrix(raw.match_matrix, k2, k3)).to(device)
         if not gt.any():
             continue
         optimizer.zero_grad(set_to_none=True)
         out = _forward_train(model, model_name, frame)
         loss, parts = _train_loss(
-            out, gt, temperature=temperature, label_smoothing=label_smoothing, w1=w1, w2=w2
+            out, gt, temperature=temperature, label_smoothing=label_smoothing, w1=w1, w2=w2,
+            none_weight=none_weight,
         )
         if not torch.isfinite(loss):
             continue
@@ -317,8 +337,15 @@ def train(
     limit_val_frames: Optional[int] = None,
     pairwise_batch_size: int = 64,
     box_source: Optional[str] = None,
+    none_loss: bool = False,
 ) -> Path:
     """Train (from scratch) or fine-tune a matcher; returns the best checkpoint.
+
+    ``none_loss=True`` adds a term that makes the second-stage score absolute
+    (a pair above zero, a non-pair below), so that a camera box without a LiDAR
+    partner can score every candidate low. Use it with caches that also hold
+    unpaired camera boxes and the frame's other LiDAR boxes, and read the
+    weights with ``score_mode: absolute`` in the model config.
 
     Args:
         model: Registry name (``"crlite"``, ...) or an already-built model
@@ -437,6 +464,7 @@ def train(
         "label_smoothing": label_smoothing,
         "stage1_weight": stage1_weight,
         "stage2_weight": stage2_weight,
+        "none_loss": none_loss,
         "seed": seed,
         "train_data": str(train_h5),
         "val_data": str(val_h5),
@@ -473,6 +501,7 @@ def train(
                 w1=stage1_weight,
                 w2=stage2_weight,
                 rng=np_rng,
+                none_weight=1.0 if none_loss else 0.0,
             )
             val = evaluate_hdf5(
                 resolved_name,

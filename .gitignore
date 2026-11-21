@@ -5,6 +5,7 @@ __pycache__/
 *.engine
 .pixi/
 .pytest_cache/
+tmp/
 
 # Build / runtime artefacts (large, regeneratable).
 onnx/

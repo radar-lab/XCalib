@@ -11,6 +11,10 @@ Camera-LiDAR cross-modal matching for edge devices, behind one small API:
   with a gated continual refine ([continual refine](continual-refine.md)).
 - **Capture and review** the frames the matcher is lost on, and fix the wrong pairs in a
   Qt window ([review GUI](review-gui.md)).
+- **Annotate** a raw delivery into a scene: import it with draft boxes, confirm the pairs in the
+  review window, fine-tune the LiDAR boxes in
+  [SUSTechPOINTS](review-gui.md#look-at-a-scene-in-sustechpoints), and fit a pair-based
+  [homography](review-gui.md#the-homography-from-the-saved-pairs).
 - **Deploy** with ONNX/TensorRT export and **train** on HDF5 caches.
 
 `xcalib` is the deployment package for the matching front-end studied in _Position Encoding in
@@ -205,6 +209,7 @@ or from local files; see [Models and datasets](hub.md).
 - [Pair selection](pair-selection.md) — one-to-one assignment and the geometric gate.
 - [Deployed site](deployed-site.md) — capture frames the matcher is lost on, refine an existing calibration.
 - [Review GUI](review-gui.md) — fix wrong pairs in `xcalib-review`.
+- [Homography notebook](https://github.com/radar-lab/XCalib/blob/main/demo/xcalib_homography_en.ipynb) — raw delivery to scene, pairs, model, homography.
 - [Continual refine](continual-refine.md) — accumulate verified pairs and refine behind a gate.
 - [Visualization](visualization.md) — draw matching links and calibrated LiDAR projections.
 - [Models and datasets](hub.md) — load released weights and A9 dataset caches.
@@ -222,8 +227,25 @@ stable across minor versions. Anything imported from submodules (`xcalib.engine.
 
 ## Citation
 
-The xcalib paper has been accepted at IEEE Sensors Letters. This entry keeps a
-temporary paper URL note until the publisher page is live:
+Using the package or its annotation tooling? Citing the software is enough
+(also in [`CITATION.cff`](https://github.com/radar-lab/XCalib/blob/main/CITATION.cff)):
+
+```bibtex
+@software{guo2026xcalib-software,
+  author  = {Guo, Lihao and Ji, Neng and Cao, Siyang},
+  title   = {XCalib: Camera-LiDAR Cross-Modal Matching for Edge Devices},
+  year    = {2026},
+  publisher = {GitHub},
+  journal = {GitHub repository},
+  url     = {https://github.com/radar-lab/XCalib},
+  version = {0.4.0},
+  license = {Apache-2.0},
+}
+```
+
+The xcalib paper covers the diagnostic study behind the matching front-end. It has been
+accepted at IEEE Sensors Letters; this entry keeps a temporary paper URL note until the
+publisher page is live:
 
 ```bibtex
 @article{guo2026xcalib,

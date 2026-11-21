@@ -18,12 +18,27 @@ jupyterlab = ">=4"
 # Editable install from the repo source, so the demo env always tracks src/xcalib
 # (no same-version-wheel staleness). Released installs use the published wheel /
 # `pip install XCalib`; the notebook's Colab cell uses pip too.
-xcalib = { path = "..", editable = true, extras = ["onnx"] }
+xcalib = { path = "..", editable = true, extras = ["onnx", "gui"] }
+
+# The notebooks train a model. On Windows and Linux PCs the CUDA build of torch
+# lets training use an NVIDIA GPU when there is one; without one it runs on the
+# CPU as before. Same index as the repository's own environment. torchvision is
+# left out on purpose: XCalib does not use it, and on Windows its bundled image
+# libraries stop this environment's Pillow from loading.
+[target.win-64.pypi-dependencies]
+torch = { version = "*", index = "https://download.pytorch.org/whl/cu128" }
+
+[target.linux-64.pypi-dependencies]
+torch = { version = "*", index = "https://download.pytorch.org/whl/cu128" }
 
 [activation.env]
 # Windows: torch/MKL and onnxruntime/opencv each bundle an OpenMP runtime; allow
-# both to load. The demo is inference-only, so the duplicate-runtime risk is moot.
+# both to load in this local GUI/notebook environment.
 KMP_DUPLICATE_LIB_OK = "TRUE"
+# Windows: numpy's MKL must not thread through an OpenMP runtime here. The one
+# torch brings is loaded under the same name and is too old for this MKL, which
+# ends the process at the first large matrix product. torch keeps its own threads.
+MKL_THREADING_LAYER = "SEQUENTIAL"
 
 [tasks]
 run-00 = "python run_00_prepare_assets.py"
@@ -31,3 +46,7 @@ run-01 = "python run_01_match_one_frame.py"
 run-02 = "python run_02_calibrate_stream.py"
 run-03 = "python run_03_full_demo.py"
 notebook = "jupyter lab xcalib_quickstart.ipynb"
+# The homography notebook names the kernel "XCalib demo (.pixi)": register it inside this
+# environment (no user-wide change), so that it exists on every PC that runs the task.
+kernel = 'python -m ipykernel install --sys-prefix --name xcalib-demo --display-name "XCalib demo (.pixi)"'
+notebook-homography = { cmd = "jupyter lab xcalib_homography_en.ipynb", depends-on = ["kernel"] }

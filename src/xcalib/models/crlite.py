@@ -51,6 +51,15 @@ class CRLiteModel(EdgeModelBase):
         self.similarity_hidden_dims = self._int_list_or_none(
             config.get("similarity_head.hidden_dims")
         )
+        # How forward_inference reports a camera box's candidates. "relative"
+        # (default) stretches each row to 0..1, so the best candidate always
+        # scores 1. "absolute" is the sigmoid of the second-stage score: weights
+        # trained with ``trainer.train(none_loss=True)`` can then score every
+        # LiDAR box of a camera box low, which says "this box has no partner".
+        self.score_mode = str(config.get("score_mode", "relative"))
+        if self.score_mode not in ("relative", "absolute"):
+            raise ValueError(f"score_mode must be 'relative' or 'absolute', got {self.score_mode!r}")
+        self.score_temperature = float(config.get("score_temperature", 0.07))
 
         self.build_model()
         self.to(self.device)
@@ -267,6 +276,8 @@ class CRLiteModel(EdgeModelBase):
         Stage 1 produces an N×M cosine similarity; we then re-rank the top-k
         candidates per image with Stage 2 and pack the result back into a
         full N×M matrix where non-top-k entries get a sentinel value of -1.
+        With ``score_mode: absolute`` in the config the packed value is the
+        sigmoid of the Stage 2 score instead of the per-row 0..1 stretch.
         """
         if top_k is None:
             top_k = self.top_k
@@ -284,8 +295,13 @@ class CRLiteModel(EdgeModelBase):
         # Match the working dtype (FP16 after model.half()) so the per-row
         # index_put below does not raise a Float<->Half mismatch on Thor.
         final_sim = torch.full((N, M), -1.0, device=device, dtype=stage1_sim.dtype)
+        absolute = self.score_mode == "absolute"
         for i in range(N):
             row = stage2_scores[i]
+            if absolute:
+                scaled = row.float() / max(self.score_temperature, 1e-6)
+                final_sim[i, top_indices[i]] = torch.sigmoid(scaled).to(final_sim.dtype)
+                continue
             rmin, rmax = row.min(), row.max()
             if rmax > rmin:
                 normalized = (row - rmin) / (rmax - rmin)

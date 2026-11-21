@@ -102,3 +102,25 @@ def test_calibration_session_refine_uses_buffer():
     empty = CalibrationSession()
     out2 = empty.refine(_result(R0, t0))
     assert not out2.accepted and np.allclose(out2.rotation, R0)
+
+
+def test_solve_keeps_a_pose_that_explains_its_inliers_on_road_like_points():
+    """Object centres on a road are nearly coplanar. The EPnP refit of the
+    RANSAC consensus set then misses its own inliers by far over a hundred
+    pixels on this data; the solve must return a pose that fits them."""
+    from xcalib.oneshot.calibration import estimate_projection
+
+    intrinsics = CameraIntrinsics(fx=860.0, fy=640.0, cx=960.0, cy=540.0)
+    rotation = R_GT @ cv2.Rodrigues(np.array([0.0, 0.25, 0.1]))[0]
+    translation = np.array([0.2, -0.7, 0.1])
+    rng = np.random.default_rng(22)
+    points = np.c_[rng.uniform(8, 35, 120), rng.uniform(-12, 12, 120), -4.0 + rng.normal(0, 0.15, 120)]
+    pixels = project_points(points, intrinsics, rotation, translation)[0] + rng.normal(0, 2.0, (120, 2))
+    wrong = rng.random(120) < 0.35  # mistaken pairs
+    pixels[wrong] += rng.normal(0, 60, (wrong.sum(), 2))
+
+    result = estimate_projection(points, pixels, intrinsics)
+
+    assert result.success and result.n_inliers >= 60
+    assert result.reproj_error_px < 8.0
+    assert np.abs(result.translation - translation).max() < 1.0

@@ -263,10 +263,10 @@ matcher = Matcher.from_pretrained(ref.revision.model_name, weights=ref.revision.
 ```
 
 `Matcher` loads the adapters. It does not read the acceptance head. The next refine run
-starts from the serving revision. The `xcalib-review` window does not follow `current.json`:
-it keeps loading the `.pth` in the model directory.
+starts from the serving revision. The `xcalib-review` window resolves `current.json` on
+startup, so reopen it after an accepted run to review with the new revision.
 
-## In the review GUI
+## After reviewing in the window
 
 ```bash
 pip install "xcalib[gui]"
@@ -276,12 +276,22 @@ xcalib-review --scene /data/MySite --camera cam_front
 `--scene` is the scene directory (`<data_root>/<scene>`) and it needs a model directory as
 described above. Step frames with ‹ ›, click a card and pick the
 right #id or *— none —*, then **Apply this frame** or **Apply all** to write the decisions to
-the scene labels. Two buttons then learn from them:
+the scene labels. The window stops there: it has no refine button. Record what you applied and
+run the refine from Python, where the outcome and the gate's reasons are in front of you:
 
-- **Refine on corrections** is the one-shot tier. It needs at least 8 verified pairs, shows the
-  before and after retrieval accuracy, and asks whether to save the adapted weights over the
-  scene's model.
-- **Refine (accumulate)** is the continual tier. It records the applied decisions (accepted
-  ids and explicit rejections) of up to 60 corrected frames into the corpus, then runs
-  `run_continual_refine` with the default `RefineConfig` and shows the outcome. On a small scene
-  the default gate usually reports `rejected`. The window has no cancel button.
+```python
+from xcalib.continual import run_continual_refine
+from xcalib.gui import Scene
+from xcalib.gui.workflow import record_saved_pairs
+
+recorded = record_saved_pairs(Scene("/data/MySite", "cam_front"))  # labels -> corpus
+result = run_continual_refine("/data", "MySite", "cam_front", run_id="after-review-1")
+print(recorded, result.outcome, result.new_revision, result.gate_reasons)
+```
+
+`record_saved_pairs` records every frame that has a saved pair (pass `frames=` for a subset):
+its saved pairs, its explicit rejections, and what the scene's model proposes for them, which
+is how the corpus tells a confirmed suggestion from a correction. Recording a frame again
+replaces its rows. On a small scene the default gate usually reports `rejected`: the validation
+split is a tenth of the camera tracks, and a candidate cannot pass while those tracks hold too
+few samples, or only samples the serving model already gets right.

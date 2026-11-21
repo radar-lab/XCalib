@@ -26,6 +26,7 @@ import glob
 import io
 import json
 import os
+import tempfile
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -34,7 +35,7 @@ import numpy as np
 from ..oneshot.calibration import CalibrationResult
 from ..protocol import CameraIntrinsics
 
-__all__ = ["Scene", "FrameReview", "TrackEntry", "match_review"]
+__all__ = ["Scene", "FrameReview", "TrackEntry", "match_review", "matcher_target"]
 
 
 # ---------------------------------------------------------------- geometry --
@@ -108,7 +109,10 @@ def _load_pcd(path: str) -> np.ndarray:
     with open(path, "rb") as f:
         header: Dict[str, str] = {}
         while True:
-            line = f.readline().decode("ascii", errors="ignore").strip()
+            raw = f.readline()
+            if not raw:
+                raise ValueError(f"{path}: incomplete PCD header")
+            line = raw.decode("ascii", errors="ignore").strip()
             if not line or line.startswith("#"):
                 continue
             key, _, value = line.partition(" ")
@@ -124,10 +128,20 @@ def _load_pcd(path: str) -> np.ndarray:
             data = np.loadtxt(io.StringIO(f.read().decode("ascii", errors="ignore")))
             data = data.reshape(points, -1)
         elif header["DATA"] == "binary":
-            row = sum(s * c for s, c in zip(sizes, counts))
-            if not all(s == 4 for s in sizes):
-                raise ValueError(f"{path}: only 4-byte PCD fields supported")
-            data = np.frombuffer(f.read(points * row), dtype=np.float32).reshape(points, row // 4)
+            # One little-endian value per column; sensors add 1- and 2-byte fields
+            # (ring, reflectivity) beside the float coordinates.
+            kinds = header.get("TYPE", " ".join("F" * len(fields))).split()
+            try:
+                row = np.dtype([(f"c{i}", "<" + {"F": "f", "I": "i", "U": "u"}[kind] + str(size))
+                                for i, (kind, size) in enumerate(
+                                    (k, s) for k, s, c in zip(kinds, sizes, counts) for _ in range(c))])
+            except (KeyError, TypeError) as error:
+                raise ValueError(f"{path}: unsupported PCD field type") from error
+            raw = np.frombuffer(f.read(points * row.itemsize), dtype=row)
+            if len(raw) != points:
+                raise ValueError(f"{path}: PCD data is shorter than its header says")
+            data = np.stack([raw[name] for name in row.names], axis=1) if all(
+                kind == "F" for kind in kinds) else raw
         else:
             raise ValueError(f"{path}: unsupported PCD DATA={header['DATA']!r}")
 
@@ -146,6 +160,8 @@ def _load_pcd(path: str) -> np.ndarray:
         cols = [xyz_cols["x"], xyz_cols["y"], xyz_cols["z"]]
         if intensity_col is not None:
             cols.append(intensity_col)
+        if data.dtype.names:  # mixed field types: pick the wanted columns by name
+            return np.stack([data[f"c{i}"].astype(np.float32) for i in cols], axis=1)
         return np.ascontiguousarray(data[:, cols].astype(np.float32))
 
 
@@ -228,6 +244,43 @@ class Scene:
             return []
         return [o for o in _objs_of(_read_json(p)) if o.get("rect")]
 
+    def save_rects(self, frame: str, rects: List[dict]) -> None:
+        """Replace camera rectangles, preserving unrelated annotation metadata.
+
+        The camera labels are an XCalib extension; upstream LiDAR labels are
+        never modified here. Callers must clear a pair when geometry changes.
+        """
+        if frame not in self.frames():
+            raise ValueError("unknown scene frame")
+        p = self._fusion_path(frame)
+        if os.path.isfile(p):
+            ann = _read_json(p)
+            if not isinstance(ann, (dict, list)):
+                raise ValueError("camera annotation must be an object or list")
+        else:
+            ann = {"objs": []}
+        old = _objs_of(ann)
+        if not isinstance(old, list):
+            raise ValueError("camera annotation objs must be a list")
+        # Keep unrelated entries even when the file contains mixed objects.
+        objs = [o for o in old if not o.get("rect")] + list(rects)
+        if isinstance(ann, dict):
+            ann["objs"] = objs
+        else:
+            ann = objs
+        directory = os.path.dirname(p)
+        os.makedirs(directory, exist_ok=True)
+        name = None
+        try:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=directory,
+                                             delete=False, suffix=".tmp") as f:
+                name = f.name
+                json.dump(ann, f, indent=1)
+            os.replace(name, p)
+        finally:
+            if name and os.path.exists(name):
+                os.unlink(name)
+
     @staticmethod
     def rects_xyxy(rects: List[dict]) -> np.ndarray:
         return np.array([[r["rect"]["x1"], r["rect"]["y1"], r["rect"]["x2"], r["rect"]["y2"]]
@@ -253,7 +306,8 @@ class Scene:
         Km = np.asarray(K, dtype=float).reshape(3, 3)
         Em = np.asarray(E, dtype=float).reshape(4, 4)
         intr = CameraIntrinsics(fx=float(Km[0, 0]), fy=float(Km[1, 1]),
-                                cx=float(Km[0, 2]), cy=float(Km[1, 2]))
+                                cx=float(Km[0, 2]), cy=float(Km[1, 2]),
+                                distortion=cal.get("distortion"))
         return CalibrationResult(
             success=True, intrinsics=intr,
             rotation=Em[:3, :3], translation=Em[:3, 3],
@@ -288,6 +342,12 @@ class Scene:
                 o["rect"].get("x2"), o["rect"].get("y2")]) == want), None)
             if cam is None:
                 continue
+            if d.get("clear"):
+                if _clean_id(cam.get("obj_id")) or cam.get("no_match"):
+                    cam["obj_id"] = ""
+                    cam.pop("no_match", None)
+                    marked += 1
+                continue
             if d.get("none"):
                 if not cam.get("no_match") or _clean_id(cam.get("obj_id")):
                     cam["no_match"] = True
@@ -321,7 +381,7 @@ class TrackEntry:
     rect: List[float]                 # [x1, y1, x2, y2]
     applied_id: str = ""              # id already written to the labels
     rejected: bool = False            # persisted no_match mark
-    suggestion: str = ""              # the gated optimal assignment's pick
+    suggestion: str = ""              # the model's one-to-one pick (scores alone)
     options: List[dict] = field(default_factory=list)
     # options: {lidar_id, lidar_type, score, proj_px (float|None), geo_ok (bool)}
 
@@ -340,17 +400,36 @@ def match_review(matcher, scene: Scene, frame: str, threshold: float = 0.5,
                  points: Optional[np.ndarray] = None) -> FrameReview:
     """Run the matcher on one frame and assemble the reviewable structure.
 
-    Uses :meth:`Matcher.match` with ``one_to_one=True`` and the scene's saved
-    calibration (geometric gate) when present. ``image``/``points`` may be
-    passed in when the caller already loaded them (the GUI does, for display).
+    The suggestion is the model's alone: a one-to-one pick over the entries the
+    model scores at or above ``threshold``. Nothing else takes part, so a camera
+    box without a LiDAR partner cannot take the box of a true pair, and the
+    scene's calibration never rules a pair out. With a saved calibration each
+    option still says how far the LiDAR box projects from the camera box
+    (``proj_px``, ``geo_ok``); that is shown to the reviewer and decides nothing.
+    ``image``/``points`` may be passed in when the caller already loaded them
+    (the GUI does, for display).
     """
     rects = scene.load_rects(frame)
     boxes = scene.load_boxes(frame)
     review = FrameReview(frame=frame, tracks=[], boxes=boxes,
                          n_rects=len(rects), n_boxes=len(boxes))
-    if not rects or not boxes:
+    if not rects:
         return review
 
+    if matcher is None or not boxes:
+        for i, rect in enumerate(rects):
+            r = rect["rect"]
+            review.tracks.append(TrackEntry(
+                key=track_of(rect) or f"@{i}",
+                rect=[float(r[k]) for k in ("x1", "y1", "x2", "y2")],
+                applied_id=_clean_id(rect.get("obj_id")),
+                rejected=bool(rect.get("no_match")),
+                options=[{"lidar_id": _clean_id(b.get("obj_id")),
+                          "lidar_type": b.get("obj_type", ""), "score": 0.0,
+                          "proj_px": None, "geo_ok": True}
+                         for b in boxes if _clean_id(b.get("obj_id"))],
+            ))
+        return review
     if image is None:
         import cv2  # noqa: PLC0415 — cv2 is a package dependency
 
@@ -368,7 +447,7 @@ def match_review(matcher, scene: Scene, frame: str, threshold: float = 0.5,
     b3d = Scene.boxes_extents(boxes)
     calib = scene.calibration()
     res = matcher.match(image, points, b2d, b3d, top_k=1, match_threshold=0.0,
-                        one_to_one=True, calibration=calib, validate="off")
+                        one_to_one=False, calibration=calib, validate="off")
 
     k2 = np.asarray(res.kept_2d_indices).astype(int)
     k3 = np.asarray(res.kept_3d_indices).astype(int)
@@ -376,13 +455,18 @@ def match_review(matcher, scene: Scene, frame: str, threshold: float = 0.5,
     rows = k2 if k2.size else np.arange(sim.shape[0] if sim.ndim == 2 else 0)
     cols = k3 if k3.size else np.arange(sim.shape[1] if sim.ndim == 2 else 0)
 
-    # the gated optimal assignment, thresholded, in original indices
+    # The model's pick. Entries under the threshold all count the same (zero):
+    # were they ranked, a camera box without a partner would be given the box of
+    # a true pair to raise the total, and both would end up unpaired.
     suggestion: Dict[int, str] = {}
-    for i, j, s in res.assignment:
-        if s >= threshold:
-            lid = _clean_id(boxes[j].get("obj_id"))
+    if sim.ndim == 2 and sim.size:
+        from ..assign import one_to_one_assign  # noqa: PLC0415
+
+        counted = np.where(sim >= threshold, sim, 0.0)
+        for i, j, _s in one_to_one_assign(counted, threshold=threshold):
+            lid = _clean_id(boxes[int(cols[j])].get("obj_id"))
             if lid:
-                suggestion[i] = lid
+                suggestion[int(rows[i])] = lid
 
     scored_box_indices = {int(bj) for bj in cols}
     for r_pos, ri in enumerate(rows):
@@ -418,7 +502,7 @@ def match_review(matcher, scene: Scene, frame: str, threshold: float = 0.5,
                 continue
             opts.append({"lidar_id": lid, "lidar_type": box.get("obj_type", ""),
                          "score": 0.0, "proj_px": None, "geo_ok": True})
-        opts.sort(key=lambda o: (not o["geo_ok"], -o["score"]))
+        opts.sort(key=lambda o: -o["score"])  # the model's order; geometry does not reorder it
         r = rect_o["rect"]
         review.tracks.append(TrackEntry(
             key=key,
@@ -428,6 +512,46 @@ def match_review(matcher, scene: Scene, frame: str, threshold: float = 0.5,
             suggestion=suggestion.get(int(ri), ""),
             options=opts,
         ))
+    # A detector crop can be rejected by the model while its camera label is
+    # still valid. Keep it available for manual review and correction.
+    scored_rows = {int(i) for i in rows}
+    for i, rect_o in enumerate(rects):
+        if i in scored_rows:
+            continue
+        r = rect_o["rect"]
+        review.tracks.append(TrackEntry(
+            key=track_of(rect_o) or f"@{i}",
+            rect=[float(r[k]) for k in ("x1", "y1", "x2", "y2")],
+            applied_id=_clean_id(rect_o.get("obj_id")),
+            rejected=bool(rect_o.get("no_match")),
+            options=[{"lidar_id": _clean_id(b.get("obj_id")),
+                      "lidar_type": b.get("obj_type", ""), "score": 0.0,
+                      "proj_px": None, "geo_ok": True}
+                     for b in boxes if _clean_id(b.get("obj_id"))],
+        ))
     review.tracks.sort(key=lambda t: (t.key.startswith("@"),
                                       int(t.key.lstrip("@")) if t.key.lstrip("@").isdigit() else 0))
     return review
+
+
+def matcher_target(scene: Scene):
+    """``(model name, weights, config)`` of the matcher a scene serves, or None.
+
+    A revision published by continual refine (``current.json`` in the model
+    folder) comes first; without one it is the checkpoint installed there.
+    """
+    from pathlib import Path
+
+    model = scene.model_dir()
+    if model is None:
+        return None
+    model_dir, base = model
+    if not (Path(model_dir) / "current.json").exists():
+        return base, model_dir, None
+    from ..continual import resolve_model
+
+    root = Path(scene.root)
+    ref = resolve_model(root.parent, root.name, scene.camera)
+    if ref is None:
+        raise ValueError("published model pointer could not be resolved")
+    return ref.revision.model_name, ref.revision.weights_path, ref.revision.config_path

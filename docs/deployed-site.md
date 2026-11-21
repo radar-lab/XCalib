@@ -329,8 +329,10 @@ before you press Apply.
 `label_fusion/camera/<camera>/<frame>.json`: an accepted pair sets the camera box `obj_id` to the
 LiDAR id, and a rejection sets `no_match: true`.
 
-The two refine buttons train the matcher (see [Continual refine](continual-refine.md)). Neither
-changes the camera-LiDAR matrix: the review window does not call `refine_projection` or the gate.
+The window has no refine button: Apply writes the decisions and nothing more. Learning from them
+is a notebook step or a Python call (see [Continual refine](continual-refine.md)). It trains the
+matcher only: no step of it changes the camera-LiDAR matrix, calls `refine_projection`, or runs
+the gate.
 
 ## 3. Nudge the matrix in session
 
